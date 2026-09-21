@@ -3,7 +3,7 @@ import { bootstrapDb } from "@/server/bootstrap";
 import { getDb } from "@/lib/db";
 import { listTasks, createTask } from "@/server/repositories/task-repo";
 import { taskCreateSchema } from "@/shared/schemas/task";
-import { created, ok, routeErrorOrMapped } from "@/server/api-helpers";
+import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 import type { TaskStatus } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   bootstrapDb();
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = taskCreateSchema.parse(body);
     const task = createTask(getDb(), {
       title: parsed.title,

@@ -8,7 +8,7 @@ import {
   ProviderConfigNotFoundError,
 } from "@/server/repositories/provider-config-repo";
 import { providerConfigUpdateSchema } from "@/shared/schemas/provider-config";
-import { ok, noContent, notFound, routeErrorOrMapped } from "@/server/api-helpers";
+import { ok, noContent, notFound, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   bootstrapDb();
   const { id } = await ctx.params;
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = providerConfigUpdateSchema.parse(body);
     const config = updateProviderConfig(getDb(), id, {
       name: parsed.name,

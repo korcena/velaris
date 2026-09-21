@@ -36,7 +36,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   bootstrapDb();
   const { id } = await ctx.params;
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = projectUpdateSchema.parse(body);
     const project = updateProject(getDb(), id, {
       name: parsed.name,

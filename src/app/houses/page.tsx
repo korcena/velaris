@@ -77,7 +77,10 @@ export default function HousesPage() {
           method: "PATCH",
           body: JSON.stringify({ status: "archived" }),
         });
+        // Re-load so the archived house leaves the default list (or stays
+        // visible when the archived filter is active) — §5.5.
         await handleSaved(res.house);
+        await load();
         toast.success(`'${house.name}' archived`);
       } else if (action === "disable" || action === "enable") {
         const res = await apiFetch<{ house: HouseDto }>(`/api/houses/${house.id}`, {

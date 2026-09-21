@@ -22,7 +22,12 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   bootstrapDb();
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = projectCreateSchema.parse(body);
     const project = createProject(getDb(), {
       name: parsed.name,

@@ -74,7 +74,12 @@ export default function SettingsPage() {
     }
     try {
       const storedMotion = localStorage.getItem(REDUCED_MOTION_KEY);
-      if (storedMotion === "true") setReducedMotion(true);
+      if (storedMotion === "true") {
+        setReducedMotion(true);
+        // Re-apply the class on load so a saved preference actually takes
+        // effect after a reload (the CSS hooks target the <html> class).
+        applyReducedMotionClass(true);
+      }
     } catch {
       /* ignore */
     }
@@ -368,7 +373,11 @@ export default function SettingsPage() {
                 Replace animations with static indicators (Phase 3 honors this globally).
               </p>
             </div>
-            <Switch checked={reducedMotion} onCheckedChange={toggleReducedMotion} />
+            <Switch
+              checked={reducedMotion}
+              onCheckedChange={toggleReducedMotion}
+              aria-label="Reduced motion"
+            />
           </div>
           <Button
             className="mt-4"

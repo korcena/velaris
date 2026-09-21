@@ -60,10 +60,25 @@ export const houseCreateSchema = houseBase;
 export type HouseCreateInput = z.infer<typeof houseCreateSchema>;
 
 /**
- * Update schema — all fields optional. Nested agent / configuration are each
- * partial and merged onto the existing record by the repository.
+ * Update schema — all fields optional, including the nested agent /
+ * configuration (ARCHITECTURE §7). Nested objects are themselves partial:
+ * only the keys present in the payload are merged onto the existing record
+ * by the repository (zod's `.partial()` also neutralizes inner defaults, so
+ * absent keys stay absent rather than being reset to defaults).
+ *
+ * `.strict()` so an unrecognized key (e.g. a bogus `status` value that is
+ * not a valid transition) is a 400 validation error instead of being
+ * silently stripped into a no-op update. Valid status transitions are
+ * handled by the route via `houseStatusTransitionSchema` before this
+ * schema sees the payload.
  */
-export const houseUpdateSchema = houseBase.partial();
+export const houseUpdateSchema = houseBase
+  .partial()
+  .extend({
+    agent: houseAgentSchema.partial().optional(),
+    configuration: houseConfigurationSchema.partial().optional(),
+  })
+  .strict();
 
 export type HouseUpdateInput = z.infer<typeof houseUpdateSchema>;
 

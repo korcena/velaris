@@ -9,7 +9,7 @@ import {
   InvalidTaskStatusTransitionError,
 } from "@/server/repositories/task-repo";
 import { taskUpdateSchema } from "@/shared/schemas/task";
-import { ok, noContent, notFound, badTransition, routeErrorOrMapped } from "@/server/api-helpers";
+import { ok, noContent, notFound, badRequest, badTransition, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   bootstrapDb();
   const { id } = await ctx.params;
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = taskUpdateSchema.parse(body);
     const task = updateTask(getDb(), id, {
       title: parsed.title,

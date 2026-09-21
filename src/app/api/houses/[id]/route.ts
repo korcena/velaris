@@ -43,16 +43,29 @@ export async function PATCH(
   bootstrapDb();
   const { id } = await ctx.params;
   try {
-    const body = await req.json();
-
-    // Detect a status transition payload (explicit status move).
-    const statusProbe = houseStatusTransitionSchema.safeParse(body);
-    if (statusProbe.success) {
-      const house = transitionHouseStatusService(getDb(), id, statusProbe.data.status);
-      return ok({ house });
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
     }
 
-    // Otherwise treat as a field update (zod will 400 on unknown fields).
+    // Detect a status transition payload: {status: <valid status>} only.
+    // An invalid status value falls through to the strict update schema,
+    // which rejects the unrecognized key with a 400 instead of a silent no-op.
+    const statusProbe = houseStatusTransitionSchema.safeParse(body);
+    if (statusProbe.success) {
+      const keys =
+        typeof body === "object" && body !== null ? Object.keys(body) : [];
+      const isTransitionOnly =
+        keys.length === 0 || (keys.length === 1 && keys[0] === "status");
+      if (isTransitionOnly) {
+        const house = transitionHouseStatusService(getDb(), id, statusProbe.data.status);
+        return ok({ house });
+      }
+    }
+
+    // Otherwise treat as a field update (unknown keys → 400 via .strict()).
     const house = updateHouseService(getDb(), id, body);
     return ok({ house });
   } catch (err) {

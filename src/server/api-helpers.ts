@@ -45,7 +45,8 @@ export function badTransition(message: string): NextResponse {
 
 /**
  * Map an arbitrary thrown error to the correct HTTP response.
- * Handles zod + known repo exceptions; falls back to a 500.
+ * Handles zod + known repo exceptions; maps SQLite constraint failures to
+ * 400 (invalid reference or value); falls back to a 500.
  */
 export function routeError(err: unknown): NextResponse {
   if (err instanceof ZodError) {
@@ -63,6 +64,17 @@ export function routeError(err: unknown): NextResponse {
   }
   if (err instanceof InvalidStatusTransitionError || err instanceof InvalidTaskStatusTransitionError) {
     return badTransition(err.message);
+  }
+  // SQLite constraint failures (FK references to nonexistent rows, CHECK
+  // violations on enum/absolute-path columns) are client-input problems —
+  // surface them as 400 rather than an opaque 500.
+  const sqliteErr = err as { code?: unknown; message?: unknown };
+  if (
+    typeof sqliteErr.code === "string" &&
+    sqliteErr.code.startsWith("SQLITE_CONSTRAINT") &&
+    typeof sqliteErr.message === "string"
+  ) {
+    return badRequest(sqliteErr.message);
   }
   console.error("[velaris] Unhandled route error:", err);
   return NextResponse.json(

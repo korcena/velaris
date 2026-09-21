@@ -6,7 +6,7 @@ import {
   createProviderConfig,
 } from "@/server/repositories/provider-config-repo";
 import { providerConfigCreateSchema } from "@/shared/schemas/provider-config";
-import { created, ok, routeErrorOrMapped } from "@/server/api-helpers";
+import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,12 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   bootstrapDb();
   try {
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
     const parsed = providerConfigCreateSchema.parse(body);
     const config = createProviderConfig(getDb(), {
       name: parsed.name,
