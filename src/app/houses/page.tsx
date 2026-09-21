@@ -27,6 +27,11 @@ export default function HousesPage() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<HouseDto | undefined>(undefined);
+  // Bumped on every dialog open so <HouseForm key={...}> remounts with fresh
+  // initial values. HouseForm reads `existing` only in useState/useForm
+  // initializers, so without a remount a previously-opened house's values
+  // would linger and silently overwrite the next target on save.
+  const [formSession, setFormSession] = useState(0);
   const [confirmTarget, setConfirmTarget] = useState<
     { house: HouseDto; action: "archive" | "delete" | "disable" | "enable" } | undefined
   >(undefined);
@@ -51,10 +56,12 @@ export default function HousesPage() {
 
   function openCreate() {
     setEditing(undefined);
+    setFormSession((n) => n + 1);
     setFormOpen(true);
   }
   function openEdit(house: HouseDto) {
     setEditing(house);
+    setFormSession((n) => n + 1);
     setFormOpen(true);
   }
 
@@ -180,7 +187,10 @@ export default function HousesPage() {
         </div>
       )}
 
+      {/* Remount on every open (formSession) so the form initializes from
+          the CURRENT target's data. */}
       <HouseForm
+        key={`house-form-${formSession}`}
         open={formOpen}
         onOpenChange={setFormOpen}
         existing={editing}
