@@ -1,0 +1,206 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { Plus } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { PageHeader } from "@/components/layout/page-header";
+import { HouseCard } from "@/components/houses/house-card";
+import { HouseForm } from "@/components/houses/house-form";
+import { apiFetch } from "@/lib/api-client";
+import type { HouseDto } from "@/shared/types";
+
+export default function HousesPage() {
+  const [houses, setHouses] = useState<HouseDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<HouseDto | undefined>(undefined);
+  const [confirmTarget, setConfirmTarget] = useState<
+    { house: HouseDto; action: "archive" | "delete" | "disable" | "enable" } | undefined
+  >(undefined);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch<{ houses: HouseDto[] }>(
+        `/api/houses?includeArchived=${includeArchived}`,
+      );
+      setHouses(res.houses);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load houses");
+    } finally {
+      setLoading(false);
+    }
+  }, [includeArchived]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function openCreate() {
+    setEditing(undefined);
+    setFormOpen(true);
+  }
+  function openEdit(house: HouseDto) {
+    setEditing(house);
+    setFormOpen(true);
+  }
+
+  async function handleSaved(house: HouseDto) {
+    setHouses((prev) => {
+      const idx = prev.findIndex((h) => h.id === house.id);
+      if (idx === -1) return [house, ...prev];
+      const next = [...prev];
+      next[idx] = house;
+      return next;
+    });
+  }
+
+  async function runConfirmAction() {
+    if (!confirmTarget) return;
+    const { house, action } = confirmTarget;
+    try {
+      if (action === "archive") {
+        const res = await apiFetch<{ house: HouseDto }>(`/api/houses/${house.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "archived" }),
+        });
+        await handleSaved(res.house);
+        toast.success(`'${house.name}' archived`);
+      } else if (action === "disable" || action === "enable") {
+        const res = await apiFetch<{ house: HouseDto }>(`/api/houses/${house.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: action === "disable" ? "disabled" : "active" }),
+        });
+        await handleSaved(res.house);
+        toast.success(`'${house.name}' ${action === "disable" ? "disabled" : "enabled"}`);
+      } else if (action === "delete") {
+        await apiFetch(`/api/houses/${house.id}`, { method: "DELETE" });
+        setHouses((prev) => prev.filter((h) => h.id !== house.id));
+        toast.success(`'${house.name}' deleted`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setConfirmTarget(undefined);
+    }
+  }
+
+  const confirmTitle = confirmTarget
+    ? {
+        archive: `Archive ${confirmTarget.house.name}?`,
+        delete: `Delete ${confirmTarget.house.name}?`,
+        disable: `Disable ${confirmTarget.house.name}?`,
+        enable: `Enable ${confirmTarget.house.name}?`,
+      }[confirmTarget.action]
+    : "";
+
+  const confirmDesc = confirmTarget
+    ? {
+        archive: "The house will be hidden from the default list. This can be reversed.",
+        delete: "This permanently deletes the house, its agent, and its configuration.",
+        disable: "The house will be inactive and will not accept new quests.",
+        enable: "The house will become active again.",
+      }[confirmTarget.action]
+    : "";
+
+  return (
+    <div>
+      <PageHeader
+        title="The Houses"
+        subtitle="Your agents — each with an identity, an execution engine, and its own workspace permissions."
+        actions={
+          <>
+            <Button
+              variant={includeArchived ? "secondary" : "ghost"}
+              onClick={() => setIncludeArchived((v) => !v)}
+              disabled={loading}
+            >
+              {includeArchived ? "Showing archived" : "Show archived"}
+            </Button>
+            <Button onClick={openCreate}>
+              <Plus className="mr-2 h-4 w-4" /> New house
+            </Button>
+          </>
+        }
+      />
+
+      {loading ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            Summoning the houses…
+          </CardContent>
+        </Card>
+      ) : houses.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center">
+            <p className="font-serif-display text-xl text-foreground">
+              The city's great houses lie empty.
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Found your first house to begin assigning quests.
+            </p>
+            <Button className="mt-6" onClick={openCreate}>
+              <Plus className="mr-2 h-4 w-4" /> Found a house
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {houses.map((house) => (
+            <HouseCard
+              key={house.id}
+              house={house}
+              onEdit={() => openEdit(house)}
+              onToggle={() =>
+                setConfirmTarget({
+                  house,
+                  action: house.status === "active" ? "disable" : "enable",
+                })
+              }
+              onArchive={() => setConfirmTarget({ house, action: "archive" })}
+              onDelete={() => setConfirmTarget({ house, action: "delete" })}
+            />
+          ))}
+        </div>
+      )}
+
+      <HouseForm
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        existing={editing}
+        onSaved={handleSaved}
+      />
+
+      <AlertDialog
+        open={!!confirmTarget}
+        onOpenChange={(open) => {
+          if (!open) setConfirmTarget(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmDesc}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={runConfirmAction}>Confirm</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

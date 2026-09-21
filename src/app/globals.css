@@ -1,0 +1,142 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* =================================================================== */
+/* Velaris design tokens (ARCHITECTURE §10)                            */
+/* =================================================================== */
+
+@theme {
+  /* Velaris palette */
+  --color-velaris-midnight: #0b1026;
+  --color-velaris-night: #151b3d;
+  --color-velaris-purple: #7c6cf0;
+  --color-velaris-purple-deep: #4b3fa8;
+  --color-velaris-silver: #cdd3f0;
+  --color-velaris-silver-muted: #8b93b8;
+  --color-velaris-gold: #e8c66b;
+  --color-velaris-crimson: #e36a6a;
+  --color-velaris-teal: #5ecfb8;
+
+  /* Typography */
+  --font-serif: "Cormorant Garamond", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* Border radius */
+  --radius: 0.75rem;
+
+  /* shadcn-style semantic slots (mapped to Velaris tokens) */
+  --color-background: var(--velaris-midnight);
+  --color-foreground: var(--velaris-silver);
+  --color-card: var(--velaris-night);
+  --color-card-foreground: var(--velaris-silver);
+  --color-popover: var(--velaris-night);
+  --color-popover-foreground: var(--velaris-silver);
+  --color-primary: var(--velaris-purple);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--velaris-night);
+  --color-secondary-foreground: var(--velaris-silver);
+  --color-muted: color-mix(in oklab, var(--velaris-night) 60%, black);
+  --color-muted-foreground: var(--velaris-silver-muted);
+  --color-accent: color-mix(in oklab, var(--velaris-purple) 18%, var(--velaris-night));
+  --color-accent-foreground: var(--velaris-silver);
+  --color-destructive: var(--velaris-crimson);
+  --color-destructive-foreground: #ffffff;
+  --color-border: color-mix(in oklab, var(--velaris-silver) 18%, var(--velaris-night));
+  --color-input: color-mix(in oklab, var(--velaris-silver) 22%, var(--velaris-night));
+  --color-ring: var(--velaris-purple);
+  --color-gold: var(--velaris-gold);
+  --color-teal: var(--velaris-teal);
+  --color-crimson: var(--velaris-crimson);
+}
+
+/* =================================================================== */
+/* Base                                                                */
+/* =================================================================== */
+
+:root {
+  color-scheme: dark;
+  --velaris-midnight: #0b1026;
+  --velaris-night: #151b3d;
+  --velaris-purple: #7c6cf0;
+  --velaris-purple-deep: #4b3fa8;
+  --velaris-silver: #cdd3f0;
+  --velaris-silver-muted: #8b93b8;
+  --velaris-gold: #e8c66b;
+  --velaris-crimson: #e36a6a;
+  --velaris-teal: #5ecfb8;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--velaris-midnight);
+  color: var(--velaris-silver);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* Layered starfield background (CSS-only, no JS for the static part). */
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(124, 108, 240, 0.18), transparent 55%),
+    radial-gradient(ellipse at 85% 10%, rgba(232, 198, 107, 0.1), transparent 40%),
+    radial-gradient(1px 1px at 20px 30px, rgba(205, 211, 240, 0.7), transparent),
+    radial-gradient(1px 1px at 130px 90px, rgba(205, 211, 240, 0.5), transparent),
+    radial-gradient(1.5px 1.5px at 300px 40px, rgba(232, 198, 107, 0.6), transparent),
+    radial-gradient(1px 1px at 400px 220px, rgba(205, 211, 240, 0.4), transparent),
+    radial-gradient(1px 1px at 550px 120px, rgba(205, 211, 240, 0.55), transparent);
+  background-size: 100% 100%, 100% 100%, 160px 160px, 200px 200px, 240px 240px, 320px 320px, 280px 280px;
+}
+
+/* Serif headings (BookTok / Night Court voice). */
+h1,
+h2,
+h3,
+.font-serif-display {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* =================================================================== */
+/* Reduced motion support (REQUIRED)                                   */
+/* =================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* When the Settings toggle sets this class on <html>, disable animations. */
+html.velaris-reduced-motion *,
+html.velaris-reduced-motion *::before,
+html.velaris-reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* =================================================================== */
+/* Status badges (subtle, Phase-1-safe)                                */
+/* =================================================================== */
+
+.status-glow-active {
+  box-shadow: 0 0 14px rgba(232, 198, 107, 0.25);
+}
+.status-glow-disabled {
+  opacity: 0.6;
+}
+.status-glow-archived {
+  opacity: 0.45;
+}
+
+/* Utility for a soft glow card shadow used across panels. */
+.velaris-card-shadow {
+  box-shadow: 0 0 24px rgba(124, 108, 240, 0.18);
+}

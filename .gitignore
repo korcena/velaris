@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# database (SQLite files — keep migrations, not the db)
+/db/
+*.db
+*.db-shm
+*.db-wal
+
+# env
+.env.local
+.env
+
+# logs / reports
+playwright-report/
+test-results/
+coverage/
+
+# misc
+*.pem
+*.log
+.DS_Store
+.vercel
+
+# typescript
+*.tsbuildinfo
