@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
@@ -80,31 +80,38 @@ export function projectRowToDto(row: (typeof projects.$inferSelect)): ProjectDto
 
 function gitInfoForDir(directory: string): ProjectGitInfo {
   // Best-effort git detection via the git CLI. Non-fatal on failure.
-  const run = (args: string, fallback: string | null): string | null => {
+  //
+  // SECURITY: the directory is a user-supplied path. We pass it as a single
+  // argument array element to execFileSync (no shell), so directory names
+  // containing shell metacharacters are treated as a literal path and can
+  // never be interpreted as commands. `GIT_TERMINAL_PROMPT=0` prevents git
+  // from hanging on a credential prompt for network operations.
+  const run = (args: string[], fallback: string | null): string | null => {
     try {
-      return execSync(`git -C "${directory}" ${args}`, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
-        .trim()
-        .split("\n")[0] || fallback;
+      return (
+        execFileSync("git", ["-C", directory, ...args], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 10_000,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+        })
+          .trim()
+          .split("\n")[0] || fallback
+      );
     } catch {
       return fallback;
     }
   };
 
   // Is this a git repo at all?
-  try {
-    execSync(`git -C "${directory}" rev-parse --is-inside-work-tree`, {
-      stdio: "ignore",
-    });
-  } catch {
+  const isRepo = run(["rev-parse", "--is-inside-work-tree"], null);
+  if (isRepo !== "true") {
     return { branch: null, remote: null, dirty: false };
   }
 
-  const branch = run("rev-parse --abbrev-ref HEAD", null);
-  const remote = run("remote get-url origin", null);
-  const porcelain = run("status --porcelain", "");
+  const branch = run(["rev-parse", "--abbrev-ref", "HEAD"], null);
+  const remote = run(["remote", "get-url", "origin"], null);
+  const porcelain = run(["status", "--porcelain"], "");
   const dirty = porcelain !== null && porcelain.trim().length > 0;
 
   return { branch, remote, dirty };

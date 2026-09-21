@@ -61,7 +61,12 @@ export function seedDefaultProviderConfigs(
   db: VelarisDb | Database.Database,
 ): number {
   // Normalise to the underlying raw connection regardless of which type we got.
-  const raw: Database.Database = "prepare" in db ? db : (db as unknown as Database.Database);
+  // The Drizzle wrapper does NOT expose `prepare` (it's the raw connection's
+  // API), so detect the wrapper by its $client property instead.
+  const raw: Database.Database =
+    "$client" in db
+      ? ((db as VelarisDb) as unknown as { $client: Database.Database }).$client
+      : (db as Database.Database);
 
   let inserted = 0;
   const defaults: { name: string; type: ProviderConfigType }[] = [

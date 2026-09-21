@@ -368,6 +368,31 @@ describe("project repository", () => {
     deleteTask(db, taskId);
     expect(() => deleteProject(db, project.id)).not.toThrow();
   });
+
+  it("treats a directory with shell metacharacters as a literal path (no command execution)", () => {
+    const db = getDb();
+    // A real directory whose NAME contains shell metacharacters. Before the
+    // execFileSync fix this caused arbitrary command execution via
+    // `git -C "${directory}" ...` string interpolation in a shell.
+    const marker = path.join(tmpDir, "GIT_INJECT_MARKER");
+    const evilName = `evil"; touch ${marker}; echo "`;
+    const evilDir = path.join(tmpDir, evilName);
+    // evilName contains slashes (the marker path), so the joined path nests —
+    // recursive mkdir creates the intermediate literal-named directories.
+    fs.mkdirSync(evilDir, { recursive: true });
+
+    try {
+      const project = createProject(db, { name: "Evil", directory: evilDir });
+      // Registration succeeds (the directory genuinely exists)…
+      expect(project.directory).toBe(evilDir);
+      // …and the metacharacters had no shell effect — git simply reports
+      // "not a repository" for the literal path.
+      expect(project.gitInfo).toEqual({ branch: null, remote: null, dirty: false });
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(evilDir, { recursive: true, force: true });
+    }
+  });
 });
 
 /* ================================================================== */
@@ -393,6 +418,19 @@ describe("provider config repository", () => {
 
     // Second call inserts nothing.
     expect(seedDefaultProviderConfigs(raw)).toBe(0);
+    expect(listProviderConfigs(getDb())).toHaveLength(2);
+  });
+
+  it("seed accepts BOTH the raw connection and the Drizzle wrapper (engine + web boot paths)", () => {
+    // The engine boot calls seed with the raw connection; the web bootstrap
+    // and any service-layer caller may hand over the Drizzle wrapper. Both
+    // must work — the wrapper must be unwrapped via $client, not crash on
+    // `prepare is not a function`.
+    const viaRaw = seedDefaultProviderConfigs(getRawDb());
+    expect(viaRaw).toBe(2);
+
+    // Idempotent when called with the Drizzle wrapper on a seeded DB.
+    expect(seedDefaultProviderConfigs(getDb())).toBe(0);
     expect(listProviderConfigs(getDb())).toHaveLength(2);
   });
 
