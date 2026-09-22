@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Plus } from "lucide-react";
+import { Fragment, useEffect, useState, useCallback } from "react";
+import { Activity, Loader2, Plus, XCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -38,10 +38,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader } from "@/components/layout/page-header";
+import { TaskStatusBadge, isTerminalStatus } from "@/components/houses/task-status-badge";
+import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import { taskCreateSchema } from "@/shared/schemas/task";
 import { DEFAULT_TASK_TYPES, TASK_PRIORITIES } from "@/shared/constants";
-import type { TaskDto, HouseDto, ProjectDto } from "@/shared/types";
+import type { TaskDto, HouseDto, ProjectDto, ExecutionEventDto } from "@/shared/types";
 
 type TaskFormValues = z.infer<typeof taskCreateSchema>;
 
@@ -52,6 +54,12 @@ export default function QuestBoardPage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Expandable per-task activity feed (Job F.3).
+  const [activityOpen, setActivityOpen] = useState<string | null>(null);
+  const [eventsByTask, setEventsByTask] = useState<Record<string, ExecutionEventDto[]>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const { sequence } = useVelarisStream();
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskCreateSchema),
@@ -95,7 +103,33 @@ export default function QuestBoardPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, sequence]);
+
+  useEffect(() => {
+    if (!activityOpen) return;
+    apiFetch<{ events: ExecutionEventDto[] }>(`/api/tasks/${activityOpen}/events`)
+      .then((res) => setEventsByTask((prev) => ({ ...prev, [activityOpen]: res.events })))
+      .catch(() => setEventsByTask((prev) => ({ ...prev, [activityOpen]: [] })));
+  }, [activityOpen, sequence]);
+
+  async function cancelTask(id: string) {
+    setBusyId(id);
+    try {
+      const res = await apiFetch<{ task: TaskDto; cancelled: boolean }>(
+        `/api/tasks/${id}/cancel`,
+        { method: "POST" },
+      );
+      if (res.cancelled) toast.success("Quest cancelled");
+      else toast.info("Quest already completed");
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? res.task : t)),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to cancel quest");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const selectedProject = watch("projectId");
 
@@ -128,24 +162,13 @@ export default function QuestBoardPage() {
     <div>
       <PageHeader
         title="Quest Board"
-        subtitle="Log tasks for your houses. In Phase 1, quests wait in queue — execution arrives with the engine in Phase 2."
+        subtitle="Log tasks for your houses and track their execution in real time."
         actions={
           <Button onClick={() => setOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> New quest
           </Button>
         }
       />
-
-      <Card className="mb-6">
-        <CardContent className="flex items-center gap-3 border-b-0 py-3 text-sm text-muted-foreground">
-          <span className="h-2 w-2 rounded-full bg-velaris-gold" />
-          <span>
-            Status is locked to <Badge variant="outline" className="align-middle">queued</Badge> and{" "}
-            <Badge variant="outline" className="align-middle">cancelled</Badge> in Phase 1{" "}
-            <span className="italic">— awaiting the engine.</span>
-          </span>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
@@ -167,25 +190,24 @@ export default function QuestBoardPage() {
                   <TableHead>Priority</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Assigned to</TableHead>
+                  <TableHead>Activity</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {tasks.map((task) => (
-                  <TableRow key={task.id}>
-                    <TableCell className="font-medium text-foreground">{task.title}</TableCell>
-                    <TableCell>{task.type}</TableCell>
-                    <TableCell>
-                      <PriorityBadge priority={task.priority} />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={task.status === "cancelled" ? "secondary" : "default"}>
-                        {task.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {houses.find((h) => h.id === task.houseId)?.name ?? "—"}
-                    </TableCell>
-                  </TableRow>
+                  <FragmentRow
+                    key={task.id}
+                    task={task}
+                    houseName={houses.find((h) => h.id === task.houseId)?.name ?? "—"}
+                    activityOpen={activityOpen === task.id}
+                    events={eventsByTask[task.id] ?? null}
+                    busy={busyId === task.id}
+                    onToggleActivity={() =>
+                      setActivityOpen((cur) => (cur === task.id ? null : task.id))
+                    }
+                    onCancel={() => cancelTask(task.id)}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -198,7 +220,7 @@ export default function QuestBoardPage() {
           <DialogHeader>
             <DialogTitle className="font-serif-display text-2xl">Post a new quest</DialogTitle>
             <DialogDescription>
-              Describe the work for a house to undertake. Execution begins in Phase 2.
+              Describe the work for a house to undertake.
             </DialogDescription>
           </DialogHeader>
 
@@ -323,6 +345,129 @@ export default function QuestBoardPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function FragmentRow({
+  task,
+  houseName,
+  activityOpen,
+  events,
+  busy,
+  onToggleActivity,
+  onCancel,
+}: {
+  task: TaskDto;
+  houseName: string;
+  activityOpen: boolean;
+  events: ExecutionEventDto[] | null;
+  busy: boolean;
+  onToggleActivity: () => void;
+  onCancel: () => void;
+}) {
+  const cancellable = !isTerminalStatus(task.status);
+  return (
+    <FragmentRowContent
+      task={task}
+      houseName={houseName}
+      activityOpen={activityOpen}
+      events={events}
+      busy={busy}
+      onToggleActivity={onToggleActivity}
+      onCancel={onCancel}
+      cancellable={cancellable}
+    />
+  );
+}
+
+function FragmentRowContent({
+  task,
+  houseName,
+  activityOpen,
+  events,
+  busy,
+  onToggleActivity,
+  onCancel,
+  cancellable,
+}: {
+  task: TaskDto;
+  houseName: string;
+  activityOpen: boolean;
+  events: ExecutionEventDto[] | null;
+  busy: boolean;
+  onToggleActivity: () => void;
+  onCancel: () => void;
+  cancellable: boolean;
+}) {
+  return (
+    <Fragment>
+      <TableRow>
+        <TableCell className="font-medium text-foreground">{task.title}</TableCell>
+        <TableCell>{task.type}</TableCell>
+        <TableCell>
+          <PriorityBadge priority={task.priority} />
+        </TableCell>
+        <TableCell>
+          <TaskStatusBadge status={task.status} />
+        </TableCell>
+        <TableCell className="text-muted-foreground">{houseName}</TableCell>
+        <TableCell>
+          <Button variant="ghost" size="sm" onClick={onToggleActivity} aria-expanded={activityOpen}>
+            <Activity className="mr-1 h-3.5 w-3.5" />
+            {activityOpen ? "Hide" : "View"}
+          </Button>
+        </TableCell>
+        <TableCell className="text-right">
+          {cancellable && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onCancel}
+              disabled={busy}
+              className="text-velaris-crimson hover:bg-velaris-crimson/10"
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <XCircle className="h-3.5 w-3.5" />
+              )}
+              Cancel
+            </Button>
+          )}
+        </TableCell>
+      </TableRow>
+      {activityOpen ? (
+        <TableRow>
+          <TableCell colSpan={7}>
+            <div className="max-h-64 overflow-y-auto rounded-lg border border-border bg-card/30 p-3 font-mono text-xs">
+              {events === null ? (
+                <p className="italic text-muted-foreground">Loading activity…</p>
+              ) : events.length === 0 ? (
+                <p className="italic text-muted-foreground">No activity recorded yet.</p>
+              ) : (
+                <ol className="space-y-2">
+                  {events.map((ev) => (
+                    <li key={ev.id} className="rounded border border-border bg-card/40 px-2 py-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge variant="outline">{ev.type}</Badge>
+                        <span className="text-muted-foreground">
+                          {new Date(ev.createdAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      {ev.payload && Object.keys(ev.payload).length > 0 ? (
+                        <pre className="mt-1 overflow-x-auto text-[0.7rem] text-muted-foreground">
+                          {JSON.stringify(ev.payload)}
+                        </pre>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </Fragment>
   );
 }
 

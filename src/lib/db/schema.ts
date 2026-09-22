@@ -18,6 +18,7 @@ import {
   sqliteTable,
   text,
   integer,
+  real,
   uniqueIndex,
   index,
   check,
@@ -177,7 +178,10 @@ export const tasks = sqliteTable(
     index("idx_tasks_project").on(t.projectId),
     check("ck_tasks_title_len", sql`length(title) between 1 and 200`),
     check("ck_tasks_priority", sql`priority in ('low','medium','high','urgent')`),
-    check("ck_tasks_status", sql`status in ('queued','cancelled')`),
+    check(
+      "ck_tasks_status",
+      sql`status in ('queued','running','awaiting_approval','awaiting_input','completed','failed','cancelled','interrupted')`,
+    ),
     check("ck_tasks_working_dir_abs", sql`working_directory is null or working_directory like '/%'`),
   ],
 );
@@ -194,6 +198,233 @@ export const engineState = sqliteTable("engine_state", {
   value: text("value"),
   updatedAt: text("updated_at").notNull().default(now()),
 });
+
+/* ------------------------------------------------------------------ */
+/* execution_sessions (Phase 2)                                       */
+/* ------------------------------------------------------------------ */
+
+export const executionSessions = sqliteTable(
+  "execution_sessions",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    houseId: text("house_id")
+      .notNull()
+      .references(() => houses.id, { onDelete: "cascade" }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    providerSessionId: text("provider_session_id"),
+    status: text("status").notNull().default("pending"),
+    provider: text("provider").notNull().default("opencode"),
+    modelId: text("model_id").notNull().default(""),
+    directory: text("directory"),
+    lastError: text("last_error"),
+    costTotal: real("cost_total").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(now()),
+    updatedAt: text("updated_at").notNull().default(now()),
+  },
+  (t) => [
+    uniqueIndex("idx_execution_sessions_provider").on(t.providerSessionId),
+    index("idx_execution_sessions_task").on(t.taskId),
+    index("idx_execution_sessions_house").on(t.houseId),
+    index("idx_execution_sessions_status").on(t.status),
+    check(
+      "ck_execution_sessions_status",
+      sql`status in ('pending','running','awaiting_approval','awaiting_input','completed','failed','aborted','interrupted')`,
+    ),
+    check("ck_execution_sessions_provider", sql`provider in ('opencode','ollama')`),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* execution_events (Phase 2 — hot stream, INTEGER autoincrement PK)  */
+/* ------------------------------------------------------------------ */
+
+export const executionEvents = sqliteTable(
+  "execution_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: text("session_id").references(() => executionSessions.id, {
+      onDelete: "set null",
+    }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    houseId: text("house_id").references(() => houses.id, { onDelete: "set null" }),
+    rawType: text("raw_type").notNull().default(""),
+    type: text("type").notNull().default("unknown"),
+    payload: text("payload").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_execution_events_session").on(t.sessionId),
+    index("idx_execution_events_task").on(t.taskId),
+    index("idx_execution_events_type").on(t.type),
+    check(
+      "ck_execution_events_type",
+      sql`type in ('task_started','session_started','message','tool_call','tool_result','approval_requested','approval_resolved','task_completed','task_failed','error','usage','session_aborted','unknown')`,
+    ),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* agent_messages (Phase 2)                                           */
+/* ------------------------------------------------------------------ */
+
+export const agentMessages = sqliteTable(
+  "agent_messages",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => executionSessions.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    /** Engine-only outbound marker: set once a user message has been relayed to
+     * the provider so a slow agent reply never re-sends the same prompt on every
+     * poll tick. Survives engine restart (reconcile re-queues on stale sessions). */
+    relayedAt: text("relayed_at"),
+    /** Provider message id used to dedupe streaming deltas: message.updated /
+     * part.updated deltas for the same assistant message upsert (not insert) the
+     * same agent_messages row so content is updated in place. */
+    providerMessageId: text("provider_message_id"),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_agent_messages_session").on(t.sessionId),
+    index("idx_agent_messages_provider").on(t.providerMessageId),
+    check("ck_agent_messages_role", sql`role in ('user','agent')`),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* approval_requests (Phase 2)                                         */
+/* ------------------------------------------------------------------ */
+
+export const approvalRequests = sqliteTable(
+  "approval_requests",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => executionSessions.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    houseId: text("house_id").references(() => houses.id, { onDelete: "set null" }),
+    providerRequestId: text("provider_request_id").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull().default("pending"),
+    title: text("title").notNull(),
+    message: text("message").notNull().default(""),
+    options: text("options").notNull().default("[]"),
+    response: text("response"),
+    createdAt: text("created_at").notNull().default(now()),
+    respondedAt: text("responded_at"),
+    /** Engine-only outbound marker: set once the user's action (approved /
+     * rejected / replied) has been relayed to the provider. Distinct from the
+     * status column so the user's chosen status is never conflated with
+     * "relayed" — history keeps the actual approved/rejected/replied state. */
+    relayedAt: text("relayed_at"),
+  },
+  (t) => [
+    uniqueIndex("idx_approvals_provider").on(t.providerRequestId),
+    index("idx_approvals_session").on(t.sessionId),
+    index("idx_approvals_status").on(t.status),
+    index("idx_approvals_house").on(t.houseId),
+    check("ck_approvals_kind", sql`kind in ('permission','question')`),
+    check(
+      "ck_approvals_status",
+      sql`status in ('pending','approved','rejected','replied','cancelled')`,
+    ),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* artifacts (Phase 2)                                                 */
+/* ------------------------------------------------------------------ */
+
+export const artifacts = sqliteTable(
+  "artifacts",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => executionSessions.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    kind: text("kind").notNull().default("other"),
+    content: text("content").notNull().default(""),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_artifacts_session").on(t.sessionId),
+    index("idx_artifacts_task").on(t.taskId),
+    check("ck_artifacts_kind", sql`kind in ('diff','file_list','result','other')`),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* notifications (Phase 2)                                            */
+/* ------------------------------------------------------------------ */
+
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    houseId: text("house_id").references(() => houses.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+    approvalRequestId: text("approval_request_id").references(() => approvalRequests.id, {
+      onDelete: "cascade",
+    }),
+    read: integer("read", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_notifications_read").on(t.read),
+    index("idx_notifications_house").on(t.houseId),
+    index("idx_notifications_created").on(t.createdAt),
+    check(
+      "ck_notifications_type",
+      sql`type in ('approval','completion','failure','system')`,
+    ),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* usage_records (Phase 2)                                             */
+/* ------------------------------------------------------------------ */
+
+export const usageRecords = sqliteTable(
+  "usage_records",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => executionSessions.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    houseId: text("house_id").references(() => houses.id, { onDelete: "set null" }),
+    modelId: text("model_id").notNull().default(""),
+    provider: text("provider").notNull().default("opencode"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cost: real("cost").notNull().default(0),
+    estimated: integer("estimated", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_usage_records_session").on(t.sessionId),
+    index("idx_usage_records_house").on(t.houseId),
+    index("idx_usage_records_task").on(t.taskId),
+  ],
+);
 
 /* ---------------------------------------------------------------- */
 /* Export row types                                                 */
@@ -218,3 +449,24 @@ export type TaskRow = typeof tasks.$inferSelect;
 export type TaskNew = typeof tasks.$inferInsert;
 
 export type EngineStateRow = typeof engineState.$inferSelect;
+
+export type ExecutionSessionRow = typeof executionSessions.$inferSelect;
+export type ExecutionSessionNew = typeof executionSessions.$inferInsert;
+
+export type ExecutionEventRow = typeof executionEvents.$inferSelect;
+export type ExecutionEventNew = typeof executionEvents.$inferInsert;
+
+export type AgentMessageRow = typeof agentMessages.$inferSelect;
+export type AgentMessageNew = typeof agentMessages.$inferInsert;
+
+export type ApprovalRequestRow = typeof approvalRequests.$inferSelect;
+export type ApprovalRequestNew = typeof approvalRequests.$inferInsert;
+
+export type ArtifactRow = typeof artifacts.$inferSelect;
+export type ArtifactNew = typeof artifacts.$inferInsert;
+
+export type NotificationRow = typeof notifications.$inferSelect;
+export type NotificationNew = typeof notifications.$inferInsert;
+
+export type UsageRecordRow = typeof usageRecords.$inferSelect;
+export type UsageRecordNew = typeof usageRecords.$inferInsert;

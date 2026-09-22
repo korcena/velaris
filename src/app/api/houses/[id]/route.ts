@@ -8,6 +8,7 @@ import {
   deleteHouseService,
   HouseNotFoundError,
 } from "@/server/services/house-service";
+import { buildHouseDetail } from "@/server/services/execution-service";
 import { houseStatusTransitionSchema } from "@/shared/schemas/house";
 import {
   ok,
@@ -32,7 +33,12 @@ export async function GET(
   const { id } = await ctx.params;
   const house = getHouseService(getDb(), id);
   if (!house) return notFound(`House not found: ${id}`);
-  return ok({ house });
+  // Response keeps the `{ house }` envelope. The house object is the plain
+  // HouseDto with the Phase-2 runtime fields (runtimeStatus, activeTask,
+  // pendingApprovals) layered on top — backward compatible with Phase 1
+  // consumers and typed as HouseDetailDto.
+  const detail = buildHouseDetail(getDb(), house);
+  return ok({ house: detail });
 }
 
 /** PATCH /api/houses/{id} — update fields and/or transition status. */

@@ -4,6 +4,7 @@ import "./globals.css";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AppTopbar } from "@/components/layout/app-topbar";
 import { Toaster } from "@/components/ui/sonner";
+import { VelarisStreamProvider } from "@/components/realtime/velaris-stream";
 
 const cormorant = Cormorant_Garamond({
   subsets: ["latin"],
@@ -37,13 +38,15 @@ export default function RootLayout({
       <body
         className={`${cormorant.variable} ${inter.variable} min-h-screen font-sans antialiased`}
       >
-        <div className="flex min-h-screen">
-          <AppSidebar />
-          <div className="flex min-h-screen flex-1 flex-col">
-            <AppTopbar />
-            <main className="flex-1 overflow-y-auto px-6 py-6 md:px-10">{children}</main>
+        <VelarisStreamProvider>
+          <div className="flex min-h-screen">
+            <AppSidebar />
+            <div className="flex min-h-screen flex-1 flex-col">
+              <AppTopbar />
+              <main className="flex-1 overflow-y-auto px-6 py-6 md:px-10">{children}</main>
+            </div>
           </div>
-        </div>
+        </VelarisStreamProvider>
         <Toaster position="bottom-right" richColors />
       </body>
     </html>

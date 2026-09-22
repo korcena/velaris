@@ -6,7 +6,16 @@
  * imports and no server-only utilities.
  */
 
-import type { HouseStatus, TaskPriority, TaskStatus } from "./types";
+import type {
+  HouseStatus,
+  TaskPriority,
+  TaskStatus,
+  SessionStatus,
+  ExecutionEventType,
+  ApprovalStatus,
+  ArtifactKind,
+  NotificationType,
+} from "./types";
 
 /* ------------------------------------------------------------------ */
 /* Navigation                                                          */
@@ -94,10 +103,79 @@ export const TASK_PRIORITIES: readonly TaskPriority[] = [
   "urgent",
 ] as const;
 
-/** Phase 1 task statuses (execution semantics land in Phase 2). */
+/** Task statuses (Phase 2 full set — echoed by the tasks CHECK constraint). */
 export const TASK_STATUSES: readonly TaskStatus[] = [
   "queued",
+  "running",
+  "awaiting_approval",
+  "awaiting_input",
+  "completed",
+  "failed",
   "cancelled",
+  "interrupted",
+] as const;
+
+/** execution_sessions.status values (echoed by ck_execution_sessions_status). */
+export const SESSION_STATUSES: readonly SessionStatus[] = [
+  "pending",
+  "running",
+  "awaiting_approval",
+  "awaiting_input",
+  "completed",
+  "failed",
+  "aborted",
+  "interrupted",
+] as const;
+
+/** execution_events.type values (echoed by ck_execution_events_type). */
+export const EXECUTION_EVENT_TYPES: readonly ExecutionEventType[] = [
+  "task_started",
+  "session_started",
+  "message",
+  "tool_call",
+  "tool_result",
+  "approval_requested",
+  "approval_resolved",
+  "task_completed",
+  "task_failed",
+  "error",
+  "usage",
+  "session_aborted",
+  "unknown",
+] as const;
+
+/** approval_requests.status values (echoed by ck_approvals_status). */
+export const APPROVAL_STATUSES: readonly ApprovalStatus[] = [
+  "pending",
+  "approved",
+  "rejected",
+  "replied",
+  "cancelled",
+] as const;
+
+/** approval_requests.kind values (echoed by ck_approvals_kind). */
+export const APPROVAL_KINDS: readonly ["permission", "question"] = [
+  "permission",
+  "question",
+] as const;
+
+/** agent_messages.role values (echoed by ck_agent_messages_role). */
+export const AGENT_MESSAGE_ROLES: readonly ["user", "agent"] = ["user", "agent"] as const;
+
+/** artifacts.kind values (echoed by ck_artifacts_kind). */
+export const ARTIFACT_KINDS: readonly ArtifactKind[] = [
+  "diff",
+  "file_list",
+  "result",
+  "other",
+] as const;
+
+/** notifications.type values (echoed by ck_notifications_type). */
+export const NOTIFICATION_TYPES: readonly NotificationType[] = [
+  "approval",
+  "completion",
+  "failure",
+  "system",
 ] as const;
 
 /* ------------------------------------------------------------------ */
@@ -158,6 +236,9 @@ export const DEFAULT_PROVIDER_BASE_URLS: Record<
   opencode: "http://127.0.0.1:4096",
   ollama: "http://localhost:11434",
 };
+
+/** Default port for spawning `opencode serve --port <p>` (opencode-server.ts). */
+export const DEFAULT_OPENCODE_PORT = 4096;
 
 /** Default OpenCode-provider IDs & model hints (never hardcoded at runtime; advisory only). */
 export const DEFAULT_AI_PROVIDER = "ollama-cloud";

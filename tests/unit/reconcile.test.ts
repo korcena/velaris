@@ -1,0 +1,164 @@
+/**
+ * Unit tests — engine boot reconciliation (src/engine/reconcile.ts).
+ *
+ * On engine restart, in-flight (running/awaiting_*) tasks are reconciled:
+ *  - no live session → requeued
+ *  - live provider session still alive (GET /session returns an id) but no
+ *    owning runner → session aborted + marked interrupted + task requeued
+ *    (the orphaned-session bug fix)
+ *  - stale/unreachable session → interrupted + requeued
+ *  - errors are logged, not thrown
+ *
+ * Uses a real temp DB + a fake OpenCode client.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
+import { migrate } from "@/lib/db/migrate";
+import { createHouse } from "@/server/repositories/house-repo";
+import { createTask, getTask, setTaskStatus } from "@/server/repositories/task-repo";
+import {
+  createExecutionSession,
+  setSessionProviderId,
+  setSessionStatus,
+  getExecutionSession,
+} from "@/server/repositories/execution-repo";
+import type { HouseConfiguration } from "@/shared/types";
+import { OpencodeClient } from "@/server/opencode";
+
+import { reconcile } from "@/engine/reconcile";
+
+let tmpDir: string;
+let dbPath: string;
+
+function makeHouseConfig(allowlist: string[]): HouseConfiguration {
+  return {
+    systemPrompt: "You are an agent.",
+    executionProvider: "opencode",
+    aiProvider: "ollama-cloud",
+    modelId: "glm-5.3",
+    workspaceAllowlist: allowlist,
+    tools: ["fs"],
+    permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+    approvalPolicy: "always",
+    concurrency: 1,
+  };
+}
+
+beforeEach(() => {
+  resetDbForTests();
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "velaris-reconcile-"));
+  dbPath = path.join(tmpDir, "test.db");
+  process.env.VELARIS_DB_PATH = dbPath;
+  migrate();
+});
+
+afterEach(() => {
+  resetDbForTests();
+  delete process.env.VELARIS_DB_PATH;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function makeClient(overrides: Partial<OpencodeClient> = {}): OpencodeClient {
+  const base = {
+    getSession: vi.fn(async () => ({ id: "" })),
+    abortSession: vi.fn(async () => {}),
+    listPendingPermissions: vi.fn(async () => []),
+    listPendingQuestions: vi.fn(async () => []),
+  } as unknown as OpencodeClient;
+  Object.assign(base, overrides);
+  return base;
+}
+
+/** Seed an in-flight task + a session row. */
+function seedInflight() {
+  const allowlist = [tmpDir];
+  const house = createHouse(getDb(), {
+    name: "H",
+    description: null,
+    agent: { name: "A", role: "R" },
+    configuration: makeHouseConfig(allowlist),
+  });
+  const task = createTask(getDb(), {
+    title: "T",
+    houseId: house.id,
+    workingDirectory: tmpDir,
+  });
+  setTaskStatus(getDb(), task.id, "running");
+  const session = createExecutionSession(getDb(), {
+    taskId: task.id,
+    houseId: house.id,
+    provider: "opencode",
+    modelId: "glm-5.3",
+    directory: tmpDir,
+  });
+  return { house, task, session };
+}
+
+describe("reconcile", () => {
+  it("requeues an in-flight task with no live session", async () => {
+    const { task } = seedInflight();
+    const client = makeClient();
+    await expect(reconcile(getDb(), getRawDb(), client, () => {})).resolves.toBeUndefined();
+    expect(getTask(getDb(), task.id)?.status).toBe("queued");
+  });
+
+  it("aborts + interrupts + requeues an in-flight task with a LIVE provider session (orphaned-session fix)", async () => {
+    const { task, session } = seedInflight();
+    setSessionProviderId(getDb(), session.id, "prov-123");
+
+    const abort = vi.fn(async () => {});
+    const client = makeClient();
+    (client.getSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "prov-123",
+      title: "",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0 },
+      model: { id: "", providerID: "" },
+      time: { created: 0, updated: 0 },
+    });
+    (client.abortSession as ReturnType<typeof vi.fn>).mockImplementation(abort);
+
+    await reconcile(getDb(), getRawDb(), client, () => {});
+
+    // Provider session aborted.
+    expect(abort).toHaveBeenCalledWith("prov-123");
+    // Session interrupted.
+    expect(getExecutionSession(getDb(), session.id)?.status).toBe("interrupted");
+    // Task requeued.
+    expect(getTask(getDb(), task.id)?.status).toBe("queued");
+  });
+
+  it("interrupts + requeues an in-flight task with a stale/unreachable provider session", async () => {
+    const { task, session } = seedInflight();
+    setSessionProviderId(getDb(), session.id, "prov-456");
+
+    // getSession throws (provider gone).
+    const client = makeClient();
+    (client.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("provider down"));
+
+    await reconcile(getDb(), getRawDb(), client, () => {});
+    expect(getExecutionSession(getDb(), session.id)?.status).toBe("interrupted");
+    expect(getTask(getDb(), task.id)?.status).toBe("queued");
+  });
+
+  it("is a no-op when there are no in-flight tasks", async () => {
+    const client = makeClient();
+    await expect(reconcile(getDb(), getRawDb(), client, () => {})).resolves.toBeUndefined();
+    // No crash, no writes.
+  });
+
+  it("logs (not throws) when approval re-sync fails", async () => {
+    seedInflight();
+    const client = makeClient();
+    (client.listPendingPermissions as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("perms down"),
+    );
+    const log = vi.fn();
+    await expect(reconcile(getDb(), getRawDb(), client, log)).resolves.toBeUndefined();
+    expect(log.mock.calls.join(" ")).toMatch(/failed|complete/i);
+  });
+});

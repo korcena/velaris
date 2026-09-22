@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { NAV_SECTIONS } from "@/shared/constants";
 import { cn } from "@/lib/utils";
+import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import type { HealthDto } from "@/shared/types";
 
 type EngineState =
@@ -60,9 +61,34 @@ export function AppTopbar() {
 
       {/* Engine status pill */}
       <div className="flex items-center gap-2">
+        <StreamPill />
         <EnginePill state={engine} />
       </div>
     </header>
+  );
+}
+
+function StreamPill() {
+  const { status } = useVelarisStream();
+  const offline = status === "closed";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs",
+        offline
+          ? "border-border bg-card/40 text-muted-foreground"
+          : "border-velaris-teal/30 bg-velaris-teal/5 text-velaris-silver-muted",
+      )}
+      title={offline ? "Live updates disconnected" : "Live updates streaming"}
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          offline ? "bg-velaris-silver-muted" : "bg-velaris-teal",
+        )}
+      />
+      Live
+    </span>
   );
 }
 

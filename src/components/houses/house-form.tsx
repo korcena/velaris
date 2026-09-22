@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -29,6 +29,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -43,6 +44,13 @@ import {
 import type { HouseDto, HouseStatus } from "@/shared/types";
 
 type HouseFormValues = z.infer<typeof houseCreateSchema>;
+
+/** Model entry shape returned by GET /api/models (Job G). */
+interface ModelOption {
+  id: string;
+  providerName: string | null;
+  displayName: string;
+}
 
 interface Props {
   open: boolean;
@@ -126,6 +134,55 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
   } = form;
 
   const execProvider = watch("configuration.executionProvider");
+
+  // Job G — model picker. Fetch GET /api/models once per mount. When the
+  // OpenCode server is reachable we render a Select; otherwise (or when the
+  // list is empty) we fall back to the free-text Input so house creation still
+  // works with the engine off (E2E hits this fallback path).
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelsAvailable, setModelsAvailable] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const modelId = watch("configuration.modelId");
+
+  useEffect(() => {
+    let alive = true;
+    setModelsLoading(true);
+    apiFetch<{ models: ModelOption[]; available: boolean }>("/api/models?providerId=opencode")
+      .then((res) => {
+        if (!alive) return;
+        setModels(res.models ?? []);
+        setModelsAvailable(!!res.available && (res.models?.length ?? 0) > 0);
+      })
+      .catch(() => {
+        if (alive) setModelsAvailable(false);
+      })
+      .finally(() => {
+        if (alive) setModelsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const groupedModels = useMemo(() => {
+    const byProvider = new Map<string, ModelOption[]>();
+    for (const m of models) {
+      const key = m.providerName ?? "other";
+      const list = byProvider.get(key) ?? [];
+      list.push(m);
+      byProvider.set(key, list);
+    }
+    return Array.from(byProvider.entries());
+  }, [models]);
+
+  // The current model value must remain selectable even when it's absent from
+  // the live list (kept intact when editing an existing house).
+  const modelIsInList = models.some((m) => m.id === modelId);
+  const showPicker = modelsAvailable && !modelsLoading && (groupedModels.length > 0 || modelIsInList);
+
+  function setModel(value: string) {
+    form.setValue("configuration.modelId", value);
+  }
 
   function addAllowlist() {
     const v = allowlistInput.trim();
@@ -302,12 +359,53 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="modelId">Model id</Label>
-                  <Input
-                    id="modelId"
-                    {...register("configuration.modelId")}
-                    placeholder="glm-5.3"
-                  />
+                  <Label htmlFor="modelId">Model</Label>
+                  {showPicker ? (
+                    <>
+                      <Select value={modelId || undefined} onValueChange={setModel}>
+                        <SelectTrigger id="modelId" className="w-full">
+                          <SelectValue placeholder="Select a model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {groupedModels.map(([providerName, providerModels]) => (
+                            <div key={providerName}>
+                              <SelectLabel>{providerName}</SelectLabel>
+                              {providerModels.map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  {m.id}
+                                </SelectItem>
+                              ))}
+                            </div>
+                          ))}
+                          {modelId && !modelIsInList ? (
+                            <SelectItem key={modelId} value={modelId}>
+                              {modelId} (custom)
+                            </SelectItem>
+                          ) : null}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Current value:{" "}
+                        <span className="font-mono">{modelId || "none"}</span>
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <Input
+                        id="modelId"
+                        {...register("configuration.modelId")}
+                        placeholder="e.g. glm-5.3"
+                      />
+                      {modelsLoading ? (
+                        <p className="text-xs text-muted-foreground">Querying the engine…</p>
+                      ) : (
+                        <p className="text-xs text-velaris-gold">
+                          OpenCode server offline — enter model id manually. It will be validated
+                          when the engine starts.
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

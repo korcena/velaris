@@ -16,13 +16,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { PageHeader } from "@/components/layout/page-header";
-import { HouseCard } from "@/components/houses/house-card";
+import { HouseCard, type HouseCardData } from "@/components/houses/house-card";
 import { HouseForm } from "@/components/houses/house-form";
+import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import type { HouseDto } from "@/shared/types";
 
 export default function HousesPage() {
-  const [houses, setHouses] = useState<HouseDto[]>([]);
+  const [houses, setHouses] = useState<HouseCardData[]>([]);
   const [loading, setLoading] = useState(true);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -39,7 +40,7 @@ export default function HousesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiFetch<{ houses: HouseDto[] }>(
+      const res = await apiFetch<{ houses: HouseCardData[] }>(
         `/api/houses?includeArchived=${includeArchived}`,
       );
       setHouses(res.houses);
@@ -50,9 +51,11 @@ export default function HousesPage() {
     }
   }, [includeArchived]);
 
+  const { sequence } = useVelarisStream();
+
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, sequence]);
 
   function openCreate() {
     setEditing(undefined);
@@ -66,11 +69,18 @@ export default function HousesPage() {
   }
 
   async function handleSaved(house: HouseDto) {
+    // The form returns a plain HouseDto; enrich with default runtime fields
+    // (the next list refetch will provide accurate values).
+    const enriched: HouseCardData = {
+      ...house,
+      runtimeStatus: "idle",
+      pendingApprovals: 0,
+    };
     setHouses((prev) => {
-      const idx = prev.findIndex((h) => h.id === house.id);
-      if (idx === -1) return [house, ...prev];
+      const idx = prev.findIndex((h) => h.id === enriched.id);
+      if (idx === -1) return [enriched, ...prev];
       const next = [...prev];
-      next[idx] = house;
+      next[idx] = enriched;
       return next;
     });
   }
