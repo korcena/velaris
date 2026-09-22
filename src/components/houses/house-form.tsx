@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectLabel,
   SelectTrigger,
@@ -368,14 +369,14 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
                         </SelectTrigger>
                         <SelectContent>
                           {groupedModels.map(([providerName, providerModels]) => (
-                            <div key={providerName}>
+                            <SelectGroup key={providerName}>
                               <SelectLabel>{providerName}</SelectLabel>
                               {providerModels.map((m) => (
                                 <SelectItem key={m.id} value={m.id}>
                                   {m.id}
                                 </SelectItem>
                               ))}
-                            </div>
+                            </SelectGroup>
                           ))}
                           {modelId && !modelIsInList ? (
                             <SelectItem key={modelId} value={modelId}>
