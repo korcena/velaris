@@ -1,25 +1,44 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Bird, CheckCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Bird, Castle, CheckCheck, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { ApprovalList } from "@/components/approvals/approvals-list";
+import { ApprovalHistory } from "@/components/roost/approval-history";
 import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
-import type { NotificationDto } from "@/shared/types";
+import type { NotificationDto, NotificationType } from "@/shared/types";
 
-const NOTIF_BADGE: Record<NotificationDto["type"], { label: string; className: string }> = {
+const NOTIF_BADGE: Record<NotificationType, { label: string; className: string }> = {
   approval: { label: "approval", className: "bg-velaris-gold/15 text-velaris-gold" },
   completion: { label: "complete", className: "bg-velaris-teal/15 text-velaris-teal" },
   failure: { label: "failure", className: "bg-velaris-crimson/15 text-velaris-crimson" },
   system: { label: "system", className: "bg-velaris-purple/15 text-velaris-purple" },
 };
+
+// Select options use the same labels as the badges for consistency.
+const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "all", label: "All types" },
+  { value: "approval", label: NOTIF_BADGE.approval.label },
+  { value: "completion", label: NOTIF_BADGE.completion.label },
+  { value: "failure", label: NOTIF_BADGE.failure.label },
+  { value: "system", label: NOTIF_BADGE.system.label },
+];
 
 export default function MessengerRoostPage() {
   const { sequence } = useVelarisStream();
@@ -28,11 +47,14 @@ export default function MessengerRoostPage() {
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<"all" | NotificationType>("all");
+  const [unreadOnly, setUnreadOnly] = useState(false);
 
   const load = useCallback(async () => {
     try {
+      const q = unreadOnly ? "?unreadOnly=1" : "";
       const res = await apiFetch<{ notifications: NotificationDto[]; unread: number }>(
-        "/api/notifications",
+        `/api/notifications${q}`,
       );
       setNotifications(res.notifications);
       setUnread(res.unread);
@@ -41,11 +63,19 @@ export default function MessengerRoostPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [unreadOnly]);
 
   useEffect(() => {
     void load();
   }, [load, sequence]);
+
+  const visible = useMemo(
+    () =>
+      typeFilter === "all"
+        ? notifications
+        : notifications.filter((n) => n.type === typeFilter),
+    [notifications, typeFilter],
+  );
 
   async function markRead(id: string) {
     setMarking(id);
@@ -119,25 +149,50 @@ export default function MessengerRoostPage() {
           <Card>
             <CardHeader>
               <CardTitle className="font-serif-display text-xl">Messages</CardTitle>
+              {/* Filter bar: type Select + Unread-only Switch */}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <Select
+                  value={typeFilter}
+                  onValueChange={(v) => setTypeFilter((v as "all" | NotificationType) ?? "all")}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue placeholder="All types" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TYPE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Switch checked={unreadOnly} onCheckedChange={setUnreadOnly} />
+                  Unread only
+                </label>
+              </div>
             </CardHeader>
             <CardContent>
               {loading ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   Listening for the birds…
                 </p>
-              ) : notifications.length === 0 ? (
+              ) : visible.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-16 text-center">
                   <Bird className="h-8 w-8 text-velaris-silver-muted" />
                   <p className="font-serif-display text-xl text-foreground">The roost is quiet.</p>
                   <p className="max-w-sm text-sm text-muted-foreground">
-                    No birds have been sent. When a house needs an approval — a permission, a
-                    command, or a clarification — a messenger bird will land here.
+                    {notifications.length === 0
+                      ? "No birds have been sent. When a house needs an approval — a permission, a command, or a clarification — a messenger bird will land here."
+                      : "No birds match this filter."}
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {notifications.map((n) => {
+                  {visible.map((n) => {
                     const badge = NOTIF_BADGE[n.type] ?? NOTIF_BADGE.system;
+                    const houseHref = n.houseId ? `/houses/${n.houseId}` : null;
+                    const questHref = !houseHref && n.taskId ? `/quests` : null;
                     return (
                       <div
                         key={n.id}
@@ -178,6 +233,25 @@ export default function MessengerRoostPage() {
                         <p className="mt-1 pl-4 text-xs text-muted-foreground">
                           {new Date(n.createdAt).toLocaleString()}
                         </p>
+                        {houseHref || questHref ? (
+                          <div className="mt-1 pl-4">
+                            {houseHref ? (
+                              <Link
+                                href={houseHref}
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                <Castle className="h-3 w-3" /> View house
+                              </Link>
+                            ) : questHref ? (
+                              <Link
+                                href={questHref}
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                <ScrollText className="h-3 w-3" /> View quest
+                              </Link>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -187,7 +261,7 @@ export default function MessengerRoostPage() {
           </Card>
         </TabsContent>
 
-        {/* Pending approvals across all houses */}
+        {/* Pending approvals across all houses + resolved history */}
         <TabsContent value="approvals" className="pt-4">
           <Card>
             <CardHeader>
@@ -197,6 +271,11 @@ export default function MessengerRoostPage() {
               <ApprovalList refreshKey={sequence} bare />
             </CardContent>
           </Card>
+          <Separator className="my-6" />
+          <div>
+            <h3 className="font-serif-display mb-3 text-lg text-foreground">Resolved history</h3>
+            <ApprovalHistory refreshKey={sequence} />
+          </div>
         </TabsContent>
       </Tabs>
 

@@ -205,6 +205,14 @@ export interface CostSummary {
   cacheReadTokens: number;
 }
 
+/**
+ * A house's aggregate usage across all its sessions (SUM over usage_records).
+ * `total` is the accumulated cost; `sessions` counts the usage records.
+ */
+export interface HouseUsageSummary extends CostSummary {
+  sessions: number;
+}
+
 export interface ExecutionSessionDto {
   id: Id;
   taskId: Id;
@@ -307,6 +315,8 @@ export interface HouseDetailDto extends HouseDto {
     status: TaskStatus | null;
   };
   pendingApprovals: number;
+  /** Aggregated usage across all of a house's sessions (Phase 3). */
+  usage: HouseUsageSummary;
 }
 
 /* --------------------------- Realtime / SSE ------------------------- */

@@ -140,3 +140,140 @@ html.velaris-reduced-motion *::after {
 .velaris-card-shadow {
   box-shadow: 0 0 24px rgba(124, 108, 240, 0.18);
 }
+
+/* =================================================================== */
+/* City animations (Phase 3) — transform/opacity ONLY                   */
+/* Caps: 3 smoke puffs · 12 firework particles · 6 flicker elements.   */
+/* Reduced-motion is handled by the existing global clamps + a JS       */
+/* static-glyph swap for fireworks (see HouseBuilding).                 */
+/* =================================================================== */
+
+/* --- Building chrome (static fills) --- */
+.building-facade {
+  fill: #1c2450;
+  stroke: #2c3768;
+  stroke-width: 1;
+}
+.building-roof {
+  fill: #232c60;
+  stroke: #35417a;
+  stroke-width: 1;
+}
+.building-door {
+  fill: #131a40;
+  stroke: #2c3768;
+  stroke-width: 1;
+}
+.building-chimney {
+  fill: #161d47;
+  stroke: #2c3768;
+  stroke-width: 1;
+}
+.building-windows {
+  opacity: 0.95;
+}
+.bird-body {
+  fill: #e8c66b;
+}
+.bird-wing-left,
+.bird-wing-right {
+  fill: rgba(232, 198, 107, 0.6);
+}
+.bird-dot {
+  fill: #e8c66b;
+  filter: drop-shadow(0 0 4px rgba(232, 198, 107, 0.8));
+}
+
+/* --- State styles --- */
+/* Idle: warm static windows. */
+.city-building { opacity: 1; }
+
+/* Dimmed: disabled/archived houses — faded, no animations. */
+.city-building[data-state="dimmed"] {
+  opacity: 0.45;
+}
+.city-building[data-state="dimmed"] .building-windows,
+.city-building[data-state="dimmed"] .bird-dot {
+  opacity: 0.25;
+}
+
+/* Planning: pulsing purple window glow. */
+.city-building[data-state="planning"] .building-windows {
+  animation: velaris-planning-pulse 2s ease-in-out infinite;
+}
+
+/* Working: teal smoke rising off the chimney. */
+.city-building[data-state="working"] .smoke-puff-circle {
+  fill: rgba(94, 207, 184, 0.75);
+  transform-origin: center;
+  opacity: 0;
+  animation: velaris-smoke-rise 2.8s ease-out infinite;
+}
+.city-building[data-state="working"] .smoke-puff:nth-child(1) .smoke-puff-circle { animation-delay: 0s; }
+.city-building[data-state="working"] .smoke-puff:nth-child(2) .smoke-puff-circle { animation-delay: 0.9s; }
+.city-building[data-state="working"] .smoke-puff:nth-child(3) .smoke-puff-circle { animation-delay: 1.8s; }
+
+/* Awaiting approval / input: gold messenger-bird silhouette with wing flap. */
+.city-building[data-state="awaiting_approval"] .messenger-bird,
+.city-building[data-state="awaiting_input"] .messenger-bird {
+  transform-origin: center;
+  animation: velaris-bird-hoverbob 3s ease-in-out infinite;
+}
+.city-building[data-state="awaiting_approval"] .bird-wing-left,
+.city-building[data-state="awaiting_approval"] .bird-wing-right,
+.city-building[data-state="awaiting_input"] .bird-wing-left,
+.city-building[data-state="awaiting_input"] .bird-wing-right {
+  transform-origin: center;
+  animation: velaris-bird-flap 0.7s ease-in-out infinite;
+}
+
+/* --- Keyframes (transform/opacity only) --- */
+@keyframes velaris-planning-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes velaris-smoke-rise {
+  0% { opacity: 0; transform: translateY(0) scale(0.4); }
+  20% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(-14px) scale(1); }
+}
+
+@keyframes velaris-bird-flap {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.3); }
+}
+@keyframes velaris-bird-hoverbob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+/* --- Firework burst (completed) — translates particles to var(--fx)/var(--fy). --- */
+.firework-particle {
+  transform-box: fill-box;
+  animation: velaris-firework-burst 2.2s ease-out forwards;
+}
+@keyframes velaris-firework-burst {
+  0% { opacity: 1; transform: translate(0, 0); }
+  100% { opacity: 0; transform: translate(var(--fx, 0), var(--fy, 0)); }
+}
+
+/* --- Failure flicker (failed) — 6 elements. --- */
+.failure-flicker {
+  transform-box: fill-box;
+  animation: velaris-failure-flicker 0.6s linear 3;
+}
+@keyframes velaris-failure-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+/* --- Aborted: brief dim pulse. --- */
+.aborted-bar {
+  transform-box: fill-box;
+  animation: velaris-aborted-pulse 1s ease-in-out 2;
+}
+@keyframes velaris-aborted-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.2; }
+}

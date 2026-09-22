@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, Castle, ScrollText, Bird, Crown } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
+import { CitySkyline } from "@/components/city/city-skyline";
 
 export default function HomePage() {
   return (
@@ -16,7 +17,7 @@ export default function HomePage() {
           answer their <span className="text-velaris-teal">messenger birds</span>.
         </p>
         <p className="mt-6 text-sm text-muted-foreground">
-          Phase 1 · Foundation — the city's foundations are laid. Execution arrives in Phase 2.
+          Phase 3 · The City Illuminated — your houses live and work beneath the stars.
         </p>
         <div className="mt-8 flex flex-wrap items-center gap-3">
           <Link
@@ -34,13 +35,15 @@ export default function HomePage() {
         </div>
       </section>
 
+      <CitySkyline />
+
       <section>
         <PageHeader title="The City at a Glance" subtitle="What awaits beneath the stars." />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QuickLink href="/houses" icon={Castle} title="The Houses" subtitle="Create and configure your agents." />
           <QuickLink href="/quests" icon={ScrollText} title="Quest Board" subtitle="Log tasks for your houses." />
           <QuickLink href="/high-lord" icon={Crown} title="High Lord's Court" subtitle="Orchestration — arriving in Phase 4." />
-          <QuickLink href="/roost" icon={Bird} title="Messenger Roost" subtitle="Approvals — arriving in Phase 2." />
+          <QuickLink href="/roost" icon={Bird} title="Messenger Roost" subtitle="Answer your houses' messenger birds." />
         </div>
       </section>
 
@@ -50,9 +53,10 @@ export default function HomePage() {
           <h2 className="font-serif-display text-xl text-foreground">A note from the Loremaster</h2>
         </div>
         <p className="mt-3 max-w-3xl text-sm text-muted-foreground">
-          The city of Velaris stands at the edge of the known map. Its houses are silent for now,
-          but the machinery behind them — databases, migration runners, and an idle engine that
-          keeps the heartbeat of the city — is alive and ready for the quests to come.
+          The city of Velaris stands at the edge of the known map. Within its walls your houses
+          work through the night — running quests, asking for guidance, and leaving finished
+          work in the Archives. The machinery beneath them — databases, migration runners, and a
+          watchful engine — keeps the heartbeat of the city alive.
         </p>
       </section>
     </div>

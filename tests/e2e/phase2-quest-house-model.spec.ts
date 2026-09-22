@@ -146,13 +146,17 @@ test.describe("House detail page (activity + chat + approvals)", () => {
     const detailRes = await request.get(`/api/houses/${dtHouse.id}`);
     expect(detailRes.status()).toBe(200);
     await page.goto(`/houses/${dtHouse.id}`);
-    await expect(page.getByText("Working", { exact: true })).toBeVisible();
+    // RuntimeStatusBadge appears in the header AND the Overview card (Phase 3).
+    await expect(page.getByText("Working", { exact: true }).first()).toBeVisible();
 
-    // Activity feed (first event).
-    await expect(page.getByText("task_started", { exact: true })).toBeVisible();
+    // Activity feed — the default panel is now Overview, so click the Activity
+    // tab before asserting on the feed (Phase 3 default-tab change). The feed
+    // describes task_started as "Quest began".
+    await page.getByRole("tab", { name: "Activity" }).click();
+    await expect(page.getByText("Quest began", { exact: true })).toBeVisible();
 
     // Chat tab.
-    await page.getByRole("tab", { name: "Agent chat" }).click();
+    await page.getByRole("tab", { name: "Agent Chat" }).click();
     await expect(page.getByText("Sorted the tomes by age.", { exact: true })).toBeVisible();
     await expect(page.getByText("Keep the rare ones separate.", { exact: true })).toBeVisible();
 

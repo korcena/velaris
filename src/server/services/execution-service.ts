@@ -14,7 +14,7 @@ import type {
   HouseRuntimeStatus,
   TaskStatus,
 } from "@/shared/types";
-import { getActiveSessionForHouse, listApprovalRequests } from "@/server/repositories/execution-repo";
+import { getActiveSessionForHouse, listApprovalRequests, getUsageSummaryForHouse } from "@/server/repositories/execution-repo";
 import { getTask } from "@/server/repositories/task-repo";
 
 /** Compute the derived runtime status for a house from its active session. */
@@ -58,11 +58,14 @@ export function buildHouseDetail(db: VelarisDb, house: HouseDto): HouseDetailDto
     status: "pending",
   }).length;
 
+  const usage = getUsageSummaryForHouse(db, house.id);
+
   return {
     ...house,
     runtimeStatus,
     activeTask,
     pendingApprovals,
+    usage,
   };
 }
 

@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { eq, and, sql, desc, gt } from "drizzle-orm";
+import { eq, and, sql, desc, gt, sum, count } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import {
   executionSessions,
@@ -46,6 +46,7 @@ import type {
   ExecutionEventType,
   ArtifactKind,
   CostSummary,
+  HouseUsageSummary,
 } from "@/shared/types";
 
 /* ================================================================== */
@@ -758,6 +759,24 @@ export function listArtifactsForSession(db: VelarisDb, sessionId: string): Artif
     }));
 }
 
+/** All artifacts a task produced across its sessions, in creation order. */
+export function listArtifactsForTask(db: VelarisDb, taskId: string): ArtifactDto[] {
+  return db
+    .select()
+    .from(artifacts)
+    .where(eq(artifacts.taskId, taskId))
+    .orderBy(artifacts.createdAt)
+    .all()
+    .map((r) => ({
+      id: r.id,
+      sessionId: r.sessionId,
+      taskId: r.taskId ?? null,
+      kind: r.kind as ArtifactKind,
+      content: r.content,
+      createdAt: r.createdAt,
+    }));
+}
+
 /* ================================================================== */
 /* usage_records                                                       */
 /* ================================================================== */
@@ -819,5 +838,48 @@ export function costSummaryOf(session: ExecutionSessionDto): CostSummary {
     outputTokens: session.outputTokens,
     reasoningTokens: session.reasoningTokens,
     cacheReadTokens: session.cacheReadTokens,
+  };
+}
+
+/**
+ * Aggregated usage summary for a house (SUM + row count over usage_records).
+ * Zeroed (never null) when the house has no usage history. `total` is a live
+ * SUM of the cost column so the Overview panel's "usage cost" stays current
+ * even after a house's sessions have been consolidated.
+ */
+export function getUsageSummaryForHouse(
+  db: VelarisDb,
+  houseId: string,
+): HouseUsageSummary {
+  const row = db
+    .select({
+      cost: sum(usageRecords.cost),
+      inputTokens: sum(usageRecords.inputTokens),
+      outputTokens: sum(usageRecords.outputTokens),
+      reasoningTokens: sum(usageRecords.reasoningTokens),
+      cacheReadTokens: sum(usageRecords.cacheReadTokens),
+      sessions: count(),
+    })
+    .from(usageRecords)
+    .where(eq(usageRecords.houseId, houseId))
+    .get();
+
+  const num = (v: unknown): number => {
+    if (typeof v === "number") return v;
+    if (typeof v === "bigint") return Number(v);
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  return {
+    total: num(row?.cost),
+    inputTokens: num(row?.inputTokens),
+    outputTokens: num(row?.outputTokens),
+    reasoningTokens: num(row?.reasoningTokens),
+    cacheReadTokens: num(row?.cacheReadTokens),
+    sessions: num(row?.sessions),
   };
 }

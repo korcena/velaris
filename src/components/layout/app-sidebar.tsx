@@ -130,7 +130,7 @@ export function AppSidebar() {
       </nav>
 
       <div className="border-t border-border/60 px-6 py-4 text-xs text-muted-foreground">
-        <p>Phase 2 · The Engine Awakens</p>
+        <p>Phase 3 · The City Illuminated</p>
         <p className="mt-1">Beneath the stars, the city waits.</p>
       </div>
     </aside>

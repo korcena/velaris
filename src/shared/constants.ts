@@ -61,7 +61,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   {
     path: "/roost",
     name: "Messenger Roost",
-    subtitle: "Approvals & clarifications (Phase 2)",
+    subtitle: "Approvals & clarifications",
     icon: "Bird",
   },
   {

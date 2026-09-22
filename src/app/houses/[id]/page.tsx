@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Send, Castle, ArrowLeft, Loader2 } from "lucide-react";
@@ -15,6 +15,9 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { RuntimeStatusBadge } from "@/components/houses/runtime-status-badge";
 import { ApprovalList } from "@/components/approvals/approvals-list";
+import { HouseOverview } from "@/components/houses/overview/house-overview";
+import { ActivityTimeline } from "@/components/houses/activity/activity-timeline";
+import { TaskResults } from "@/components/houses/results/task-results";
 import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import type {
@@ -65,7 +68,7 @@ export default function HouseDetailPage() {
     return () => {
       alive = false;
     };
-  }, [houseId]);
+  }, [houseId, sequence]);
 
   // Load task events for the active task.
   const loadEvents = useCallback(async (taskId: string) => {
@@ -157,53 +160,6 @@ export default function HouseDetailPage() {
 
   const houseName = house?.name ?? "House";
 
-  const activityTab = useMemo(
-    () => (
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-serif-display text-xl">Activity feed</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {hasTask ? (
-            events.length === 0 ? (
-              <p className="py-10 text-center text-sm text-muted-foreground">
-                No activity yet for this quest.
-              </p>
-            ) : (
-              <ScrollArea className="h-[24rem]">
-                <ol className="space-y-2 px-1">
-                  {events.map((ev) => (
-                    <li
-                      key={ev.id}
-                      className="rounded-lg border border-border bg-card/30 px-3 py-2 font-mono text-xs"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <Badge variant="outline">{ev.type}</Badge>
-                        <span className="shrink-0 text-muted-foreground">
-                          {new Date(ev.createdAt).toLocaleString()}
-                        </span>
-                      </div>
-                      {ev.payload && Object.keys(ev.payload).length > 0 ? (
-                        <pre className="mt-2 overflow-x-auto text-[0.7rem] text-muted-foreground">
-                          {JSON.stringify(ev.payload, null, 2)}
-                        </pre>
-                      ) : null}
-                    </li>
-                  ))}
-                </ol>
-              </ScrollArea>
-            )
-          ) : (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              This house has no active quest yet — its timeline will appear when a task begins.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-    ),
-    [events, hasTask],
-  );
-
   if (notFound) {
     return (
       <div>
@@ -249,15 +205,40 @@ export default function HouseDetailPage() {
         </div>
       ) : null}
 
-      <Tabs defaultValue="activity">
+      <Tabs defaultValue="overview">
         <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
-          <TabsTrigger value="chat">Agent chat</TabsTrigger>
+          <TabsTrigger value="chat">Agent Chat</TabsTrigger>
+          <TabsTrigger value="results">Task Results</TabsTrigger>
           <TabsTrigger value="approvals">Approvals</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="overview" className="pt-4">
+          {house ? (
+            <HouseOverview house={house} />
+          ) : (
+            <p className="py-12 text-center text-sm text-muted-foreground">
+              Loading the house…
+            </p>
+          )}
+        </TabsContent>
+
         <TabsContent value="activity" className="pt-4">
-          {activityTab}
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-serif-display text-xl">Activity feed</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {hasTask ? (
+                <ActivityTimeline events={events} />
+              ) : (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  This house has no active quest yet — its timeline will appear when a task begins.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="chat" className="pt-4">
@@ -330,6 +311,17 @@ export default function HouseDetailPage() {
                   </Button>
                 </form>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="results" className="pt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-serif-display text-xl">Task results</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <TaskResults houseId={houseId} refreshKey={sequence} />
             </CardContent>
           </Card>
         </TabsContent>
