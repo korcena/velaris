@@ -13,9 +13,10 @@ Phases 1–3 are implemented and tested:
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 — Foundation | App bootstrap, SQLite/Drizzle schema, houses/projects/tasks/provider-config CRUD, 8-section layout, dark Velaris theme, reduced-motion support | ✅ Done |
+| 1 — Foundation | App bootstrap, SQLite/Drizzle schema, houses/projects/tasks/provider-config CRUD, sectioned layout (now 9 sections), dark Velaris theme, reduced-motion support | ✅ Done |
 | 2 — Real Execution & Approvals Core | Velaris Engine (task queue, OpenCode server lifecycle, SSE ingestion), real task execution, session persistence, structured events, cost/token tracking, functional messenger-bird approvals (approve/reject/reply), live agent chat, model picker, `/api/stream` SSE | ✅ Done |
-| 3 — Velaris World & Messenger Roost | Interactive SVG city skyline with per-house status animations (chimney smoke, messenger birds, once-per-task fireworks), full house workspace panel (Overview / Activity / Agent Chat / Task Results with diff viewer / Approvals), Roost hub with filters + resolved-approval history, read-only artifacts API | ✅ Done |
+| 3 — Velaris World & Messenger Roost | Interactive city view with per-house status animations (chimney smoke, messenger birds, once-per-task fireworks), full house workspace panel (Overview / Activity / Agent Chat / Task Results with diff viewer / Approvals), Roost hub with filters + resolved-approval history, read-only artifacts API | ✅ Done |
+| 3.1 — City Map | Full-screen Sims-like bird's-eye map at `/map`: houses as shaded castles, pan & zoom (wheel + buttons), outward-spiral placement, real-time status animations & celebrations | ✅ Done |
 | 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs | ⏳ Planned |
 | 5 — Ollama-Native Agent Runtime | Direct-Ollama adapter, tool loop, native pause/resume, worktree isolation | ⏳ Planned |
 | 6 — Advanced Platform | Multi-agent houses, usage dashboards, templates, archives, monitoring | ⏳ Planned |
@@ -36,9 +37,12 @@ and MVP acceptance journey.
 - **Answer messenger birds** — when an agent requests a file/command permission or asks a
   clarifying question, a gold bird indicator appears on its house and in the Messenger
   Roost. Approve, reject, or reply; execution resumes immediately.
-- **See the city** — the dashboard plots every house as a lit building on a night skyline:
-  pulsing windows while planning, chimney smoke while working, a wing-flapping bird while
-  awaiting your answer, and a fireworks burst when a quest completes.
+- **See the city** — the **Map** page renders every house as a shaded castle on a
+  full-screen night map: the first house sits at the city heart and new houses
+  spread outward in rings. Drag to pan, wheel or buttons to zoom, click a castle
+  to visit its house. Windows pulse while planning, chimneys smoke while
+  working, a wing-flapping messenger bird appears while awaiting your answer,
+  and a fireworks burst celebrates each completed quest.
 - **Inspect results** — each house has a workspace panel with live usage stats, a
   structured activity timeline, agent chat, and per-quest results including rendered diffs
   of the files the agent changed.
@@ -105,8 +109,8 @@ stream with backoff reconnect and boot-time reconciliation of orphaned sessions.
 ## Testing
 
 - **Unit/integration (Vitest)** — schemas, repositories, the execution status machine,
-  OpenCode event mapping, queue/reconcile logic, city animation/layout logic, diff
-  parsing. Integration tests invoke API route handlers directly against a temp database.
+  OpenCode event mapping, queue/reconcile logic, city-map camera/layout/palette logic,
+  diff parsing. Integration tests invoke API route handlers directly against a temp database.
 - **E2E (Playwright)** — full UI journeys (house lifecycle, quest board, roost approvals,
-  city view, house panel). E2E boots web-only with a dedicated database and does **not**
+  city map, house panel). E2E boots web-only with a dedicated database and does **not**
   start the engine; external OpenCode/Ollama calls are mocked for determinism.
