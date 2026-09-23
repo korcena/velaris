@@ -32,13 +32,19 @@ export interface NavSection {
   icon: string;
 }
 
-/** The 8 Velaris navigation sections. */
+/** The 9 Velaris navigation sections. */
 export const NAV_SECTIONS: readonly NavSection[] = [
   {
     path: "",
     name: "Velaris",
     subtitle: "The city at night — overview",
     icon: "Sparkles",
+  },
+  {
+    path: "/map",
+    name: "Map",
+    subtitle: "The city at a glance",
+    icon: "Map",
   },
   {
     path: "/high-lord",

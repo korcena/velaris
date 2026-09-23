@@ -1,5 +1,5 @@
 /**
- * U1 — unit tests for the pure city animation-map (src/components/city/animation-map.ts).
+ * U1 — unit tests for the pure map animation-map (src/components/map/animation-map.ts).
  */
 
 import { describe, it, expect } from "vitest";
@@ -8,7 +8,7 @@ import {
   celebrationFromFrame,
   createCelebrationGuard,
   type CityVisualState,
-} from "@/components/city/animation-map";
+} from "@/components/map/animation-map";
 import type { HouseRuntimeStatus, HouseStatus, ExecutionEventDto, NotificationDto } from "@/shared/types";
 
 const RUNTIME_STATUSES: HouseRuntimeStatus[] = [

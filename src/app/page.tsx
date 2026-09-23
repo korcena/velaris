@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { Sparkles, Castle, ScrollText, Bird, Crown } from "lucide-react";
+import { Sparkles, Castle, Map as MapIcon, ScrollText, Bird, Crown } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
-import { CitySkyline } from "@/components/city/city-skyline";
 
 export default function HomePage() {
   return (
@@ -35,11 +34,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      <CitySkyline />
-
       <section>
         <PageHeader title="The City at a Glance" subtitle="What awaits beneath the stars." />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <QuickLink href="/map" icon={MapIcon} title="City Map" subtitle="Pan and zoom the city at night." />
           <QuickLink href="/houses" icon={Castle} title="The Houses" subtitle="Create and configure your agents." />
           <QuickLink href="/quests" icon={ScrollText} title="Quest Board" subtitle="Log tasks for your houses." />
           <QuickLink href="/high-lord" icon={Crown} title="High Lord's Court" subtitle="Orchestration — arriving in Phase 4." />

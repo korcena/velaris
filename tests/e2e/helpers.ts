@@ -8,9 +8,10 @@
 
 import { expect, type Page } from "@playwright/test";
 
-/** The 8 nav sections (must match src/shared/constants.ts NAV_SECTIONS). */
+/** The 9 nav sections (must match src/shared/constants.ts NAV_SECTIONS). */
 export const NAV_SECTIONS = [
   { href: "/", name: "Velaris", heading: "Velaris" },
+  { href: "/map", name: "Map", heading: "Map" },
   { href: "/high-lord", name: "High Lord's Court", heading: "High Lord's Court" },
   { href: "/houses", name: "The Houses", heading: "The Houses" },
   { href: "/quests", name: "Quest Board", heading: "Quest Board" },

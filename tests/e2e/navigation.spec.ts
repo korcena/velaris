@@ -1,12 +1,12 @@
 /**
- * E2E — navigation: all 8 sidebar sections render their pages, and the
+ * E2E — navigation: all 9 sidebar sections render their pages, and the
  * sidebar marks the active section.
  */
 
 import { test, expect } from "@playwright/test";
 import { NAV_SECTIONS } from "./helpers";
 
-test.describe("8 navigation sections", () => {
+test.describe("9 navigation sections", () => {
   for (const section of NAV_SECTIONS) {
     test(`renders ${section.name} at ${section.href}`, async ({ page }) => {
       const response = await page.goto(section.href);
@@ -26,7 +26,7 @@ test.describe("8 navigation sections", () => {
     });
   }
 
-  test("sidebar shows all 8 sections", async ({ page }) => {
+  test("sidebar shows all 9 sections", async ({ page }) => {
     await page.goto("/");
     const nav = page.locator("nav");
     for (const section of NAV_SECTIONS) {
