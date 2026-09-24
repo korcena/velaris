@@ -81,6 +81,17 @@ test.describe("Castle map", () => {
     await expect(c1).toHaveAttribute("aria-label", "Map House One");
     await expect(page.getByTestId(`map-castle-${h2.id}`)).toBeVisible();
 
+    // The seeded High Lord castle is always present at the city heart (D3):
+    // gold (data-kind="high_lord") and on the map even with zero user houses.
+    const hiHouse = (await (
+      await request.get("/api/houses?includeHighLord=true")
+    ).json()).houses.find((h: { kind: string }) => h.kind === "high_lord") as { id: string };
+    const hlCastle = page.getByTestId(`map-castle-${hiHouse.id}`);
+    await expect(hlCastle).toBeVisible();
+    await expect(hlCastle).toHaveAttribute("data-kind", "high_lord");
+    // HL owns slot 0 (oldest house → city centre).
+    await expect(hlCastle).toHaveAttribute("data-state", /idle/);
+
     // Click navigates to the house detail.
     await c1.click();
     await page.waitForURL(`/houses/${h1.id}`);

@@ -38,15 +38,15 @@ export function createOpenCodeAdapter(deps: OpenCodeAdapterDeps): AgentExecution
       const providerSessionId = created.id;
       if (!providerSessionId) return { providerSessionId: null };
 
-      await client.initSession(providerSessionId, {
-        modelID: input.modelId,
-        providerID: input.aiProvider,
-      });
-
+      // NOTE (1.18.32): `init` is NOT required to prompt a fresh session. A new
+      // session answers /message and /prompt_async directly, and init would
+      // require an invented `^msg` messageID. We skip it.
       // Compose the task prompt from the house systemPrompt + task content.
       const fullPrompt = composeTaskPrompt(input.systemPrompt, input.taskPrompt);
 
-      await client.prompt(providerSessionId, {
+      // Fire-and-forget: the model runs and streams over the /event SSE; the
+      // runner's quiet-watchdog + SSE ingest drives completion detection.
+      await client.promptAsync(providerSessionId, {
         providerID: input.aiProvider,
         modelID: input.modelId,
         prompt: fullPrompt,
@@ -56,7 +56,8 @@ export function createOpenCodeAdapter(deps: OpenCodeAdapterDeps): AgentExecution
     },
 
     async sendMessage(input: SendMessageInput): Promise<void> {
-      await client.prompt(input.providerSessionId, {
+      // Fire-and-forget for same reason as startTask (streaming over SSE).
+      await client.promptAsync(input.providerSessionId, {
         providerID: input.aiProvider,
         modelID: input.modelId,
         prompt: input.message,
@@ -91,22 +92,19 @@ export function createOpenCodeAdapter(deps: OpenCodeAdapterDeps): AgentExecution
           message: input.message,
         });
       } else {
-        // question: approve/select → reply a chosen option; reject → /reject.
+        // question: 1.18.32 `answers` is `string[][]` (one array per question, in
+        // order). There is exactly one question per approval_request in our flow,
+        // so we always send a single inner array.
         if (input.action === "reject") {
           await client.rejectQuestion(input.providerRequestId);
         } else if (input.selected && input.selected.length > 0) {
-          await client.replyQuestion(input.providerRequestId, {
-            answers: [{ questionID: input.providerRequestId, selected: input.selected }],
-          });
+          await client.replyQuestion(input.providerRequestId, [input.selected]);
         } else if (input.message) {
-          await client.replyQuestion(input.providerRequestId, {
-            answers: [{ questionID: input.providerRequestId, selected: [input.message] }],
-          });
+          // A free-text reply is sent as the single answer for that question.
+          await client.replyQuestion(input.providerRequestId, [[input.message]]);
         } else {
           // Default to the first option if available; else no-op.
-          await client.replyQuestion(input.providerRequestId, {
-            answers: [{ questionID: input.providerRequestId, selected: [] }],
-          });
+          await client.replyQuestion(input.providerRequestId, [[]]);
         }
       }
     },

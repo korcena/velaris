@@ -77,7 +77,47 @@ describe("mapProviderEvent — assistant messages", () => {
     expect(m!.assistantText).toBeUndefined();
   });
 
-  it("message.part.updated (text) → message with messageID extraction from props/part", () => {
+  it("message.updated (user role) → unknown but carries messageMeta for later part correlation", () => {
+    const m = mapProviderEvent(
+      ev("message.updated", {
+        sessionID: "s1",
+        info: { id: "msg_user", role: "user" },
+      }),
+    );
+    expect(m!.type).toBe("unknown");
+    expect(m!.assistantText).toBeUndefined();
+    expect(m!.messageMeta).toEqual({ id: "msg_user", role: "user" });
+  });
+
+  it("message.updated (assistant) exposes the correlated messageMeta id+role", () => {
+    const m = mapProviderEvent(
+      ev("message.updated", {
+        sessionID: "s1",
+        messageID: "msg_a",
+        part: { type: "text", text: "hi" },
+        info: { role: "assistant", id: "msg_a" },
+      }),
+    );
+    expect(m!.type).toBe("message");
+    expect(m!.messageMeta).toEqual({ id: "msg_a", role: "assistant" });
+  });
+
+  it("message.part.delta → unknown with a streaming_delta reason (never upserted, never truncates)", () => {
+    const m = mapProviderEvent(
+      ev("message.part.delta", {
+        sessionID: "s1",
+        messageID: "msg_1",
+        partID: "prt_1",
+        field: "text",
+        delta: "The quick",
+      }),
+    );
+    expect(m!.type).toBe("unknown");
+    expect(m!.assistantText).toBeUndefined();
+    expect(String(m!.payload.reason)).toBe("streaming_delta");
+  });
+
+  it("message.part.updated text → message with messageID extraction from props/part", () => {
     const viaProps = mapProviderEvent(
       ev("message.part.updated", {
         sessionID: "s1",
@@ -231,6 +271,51 @@ describe("mapProviderEvent — permissions & questions", () => {
       { id: "py", label: "Python" },
     ]);
   });
+
+  it("1.18.32 permission.asked → approval_requested (permission kind)", () => {
+    const m = mapProviderEvent(
+      ev("permission.asked", {
+        sessionID: "s1",
+        request: { id: "per-9", permission: "write", patterns: ["/a", "/b"], tool: { messageID: "msg-9", callID: "c9" } },
+      }),
+    );
+    expect(m!.type).toBe("approval_requested");
+    expect(m!.approval).toEqual({
+      kind: "permission",
+      providerRequestId: "per-9",
+      title: "Permission: write",
+      message: "write — /a, /b",
+      options: [],
+    });
+  });
+
+  it("1.18.32 question.asked → approval_requested with label options", () => {
+    const m = mapProviderEvent(
+      ev("question.asked", {
+        sessionID: "s1",
+        request: {
+          id: "que-1",
+          questions: [
+            { question: "Pick one", options: [{ label: "Option A" }, { label: "Option B" }], multiple: false },
+          ],
+        },
+      }),
+    );
+    expect(m!.type).toBe("approval_requested");
+    expect(m!.approval!.kind).toBe("question");
+    expect(m!.approval!.providerRequestId).toBe("que-1");
+    expect(m!.approval!.options).toEqual([{ id: "Option A", label: "Option A" }, { id: "Option B", label: "Option B" }]);
+  });
+
+  it.each(["permission.replied", "question.replied", "question.rejected"])(
+    "1.18.32 %s → approval_resolved",
+    (t) => {
+      const m = mapProviderEvent(
+        ev(t, { sessionID: "s1", requestID: "req-1", reply: "once" }),
+      );
+      expect(m!.type).toBe("approval_resolved");
+    },
+  );
 });
 
 describe("mapProviderEvent — unknown tolerance", () => {

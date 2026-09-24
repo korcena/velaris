@@ -116,6 +116,21 @@ export type UpdateTaskPatch = {
   houseId?: string | null;
   projectId?: string | null;
   workingDirectory?: string | null;
+  /**
+   * Replaces `execution_preferences` WHOLESALE (line 137 below does
+   * `JSON.stringify(patch.executionPreferences)`).
+   *
+   * CONTRACT: the `execution_preferences.plan.*` block is ENGINE-OWNED — the
+   * orchestrator writes `plan.abortReason` / `plan.abortedAt` on a High Lord
+   * parent (addendum D4c) and re-reads it to drive the burned-house UI. Any
+   * wholesale write here (e.g. the PATCH route) can erase that block. The web
+   * PATCH route guards against this for subtask-linked parents (422), but that
+   * is route-only; this repo type is the documented contract: when setting
+   * `executionPreferences`, MERGE onto the existing object rather than
+   * replacing it if the existing prefs contain a top-level `plan` key, so the
+   * engine's abort-reason block and any future engine-written plan state are
+   * never clobbered.
+   */
   executionPreferences?: Record<string, unknown>;
   /** Phase 1: only 'cancelled' is permitted after creation. */
   status?: TaskStatus;
@@ -180,6 +195,30 @@ export function setTaskStatus(
   if (!existing) return null;
   db.update(tasks)
     .set({ status, updatedAt: new Date().toISOString() })
+    .where(eq(tasks.id, taskId))
+    .run();
+  return getTask(db, taskId);
+}
+
+/**
+ * Record/overwrite the High Lord `execution_preferences.plan` block with an
+ * abort reason (addendum D4c). Shared by the ENGINE's abortPlan and the WEB's
+ * cancel route so the burn-house UI (`plan-board.tsx` / map) sees `abortReason`
+ * consistently. Merges onto any existing `plan` sub-object rather than
+ * clobbering unrelated top-level prefs.
+ */
+export function writeTaskPlanAbortReason(
+  db: VelarisDb,
+  taskId: string,
+  { abortReason, abortedAt }: { abortReason: string; abortedAt: string },
+): TaskDto | null {
+  const existing = getTask(db, taskId);
+  if (!existing) return null;
+  const prefs = { ...existing.executionPreferences };
+  const plan = (existing.executionPreferences?.plan ?? {}) as Record<string, unknown>;
+  prefs.plan = { ...plan, abortReason, abortedAt };
+  db.update(tasks)
+    .set({ executionPreferences: JSON.stringify(prefs) })
     .where(eq(tasks.id, taskId))
     .run();
   return getTask(db, taskId);

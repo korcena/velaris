@@ -22,6 +22,13 @@
       "when": 1790081451532,
       "tag": "0002_lying_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790124472996,
+      "tag": "0003_smooth_doctor_doom",
+      "breakpoints": true
     }
   ]
 }

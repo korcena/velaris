@@ -52,6 +52,12 @@ export interface RunContext {
   house: HouseDto;
   directory: string;
   modelId: string;
+  /**
+   * Engine log sink (optional). Used to log when the provider resolves the
+   * session to a directory different from the task's working_directory — a
+   * belt-and-braces note so a future resolution drift stays visible.
+   */
+  log?: (msg: string) => void;
 }
 
 export type TerminalStatus = "completed" | "failed" | "aborted" | "interrupted";
@@ -116,6 +122,10 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
 
   // In-memory state for completion detection.
   let producedMessage = false;
+  // Provider-message-id → role correlation (Defect C): `message.part.updated`
+  // events carry NO role, but `message.updated` events do. We track it here so a
+  // text part whose message is a USER prompt is never ingested as an agent row.
+  const roleByMessageId = new Map<string, string>();
 
   const persistTerminalNow = async (status: SessionStatus, error: string | null): Promise<RunResult> => {
     const terminalStatus: TerminalStatus =
@@ -156,10 +166,29 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
       payload: { providerSessionId },
     });
 
-    // ---- Subscribe to the directory's SSE stream. ----
+    // ---- Resolve the SSE directory from the provider (belt-and-braces). ----
+    // 1.18.32 roots the session at the directory given to createSession (query
+    // param), and events flow on the session's ACTUAL resolved directory. Use
+    // that resolved directory for subscribeEvents rather than blindly trusting
+    // the task's working_directory — a resolution mismatch would otherwise leave
+    // the task hanging `running` with no incoming events.
+    let sseDirectory = directory;
+    try {
+      const live = await client.getSession(providerSessionId);
+      if (live?.directory) sseDirectory = live.directory;
+    } catch {
+      // getSession is best-effort here; fall back to the task directory.
+    }
+    if (sseDirectory !== directory) {
+      (ctx.log ?? (() => {}))(
+        `[runner] session ${providerSessionId} resolved to directory "${sseDirectory}" (task dir "${directory}")`,
+      );
+    }
+
+    // ---- Subscribe to the (provider-resolved) directory's SSE stream. ----
     let unsubscribe: (() => void) | null = null;
     let streamOpen = false;
-    unsubscribe = client.subscribeEvents(directory, {
+    unsubscribe = client.subscribeEvents(sseDirectory, {
       signal,
       onEvent: (ev) => {
         streamOpen = true;
@@ -169,6 +198,7 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
           onMessage: () => { producedMessage = true; },
           onCost: (c) => { lastCost = c; },
           producedMessage,
+          roleByMessageId,
         });
       },
       onStatus: () => {},
@@ -392,6 +422,8 @@ async function handleProviderEvent(
     onMessage: () => void;
     onCost: (c: { cost: number; input: number; output: number; reasoning: number; cacheRead: number }) => void;
     producedMessage: boolean;
+    /** Correlates a provider message id to its role (Defect C). */
+    roleByMessageId: Map<string, string>;
   },
 ): Promise<void> {
   const { db, task, house } = ctx;
@@ -410,7 +442,23 @@ async function handleProviderEvent(
     payload: mapped.payload,
   });
 
+  // Record the message's role from a `message.updated` event so later
+  // `message.part.updated` parts can be attributed to assistant vs user.
+  if (mapped.messageMeta) {
+    hooks.roleByMessageId.set(mapped.messageMeta.id, mapped.messageMeta.role);
+  }
+
   if (mapped.assistantText) {
+    // Defect C: a text part may belong to a USER message (the user's own prompt
+    // is streamed as a text part too). Only ingest as an agent row when the
+    // correlated role is assistant (or unknown — then keep for back-compat).
+    const ownerRole = mapped.providerMessageId
+      ? hooks.roleByMessageId.get(mapped.providerMessageId) ?? null
+      : null;
+    const isAssistant =
+      ownerRole === null || ownerRole === "assistant" || ownerRole === "model" || ownerRole === "agent";
+    if (!isAssistant) return; // user's own prompt — do not ingest as agent
+
     // Bug 7: streaming deltas for the same provider message id are upserted
     // into one agent_messages row (dedup), never inserted per-delta. If the
     // provider supplies no message id, this falls back to an insert.

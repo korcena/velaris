@@ -13,9 +13,11 @@ import type {
   HouseDetailDto,
   HouseRuntimeStatus,
   TaskStatus,
+  HighLordPlanState,
 } from "@/shared/types";
 import { getActiveSessionForHouse, listApprovalRequests, getUsageSummaryForHouse } from "@/server/repositories/execution-repo";
 import { getTask } from "@/server/repositories/task-repo";
+import { deriveHighLordPlanState } from "@/server/services/plan-service";
 
 /** Compute the derived runtime status for a house from its active session. */
 export function deriveRuntimeStatus(
@@ -60,12 +62,16 @@ export function buildHouseDetail(db: VelarisDb, house: HouseDto): HouseDetailDto
 
   const usage = getUsageSummaryForHouse(db, house.id);
 
+  const planState =
+    house.kind === "high_lord" ? deriveHighLordPlanState(db, house.id) : undefined;
+
   return {
     ...house,
     runtimeStatus,
     activeTask,
     pendingApprovals,
     usage,
+    ...(planState ? { planState } : {}),
   };
 }
 
@@ -73,17 +79,24 @@ export function buildHouseDetail(db: VelarisDb, house: HouseDto): HouseDetailDto
  * Lightweight list-time enrichment for a house: derived runtime status + pending
  * approval count. Used by GET /api/houses (bird indicator on house cards) where
  * full `buildHouseDetail` per row would be too heavy. Keeps the house's own
- * fields untouched so the list envelope stays backward compatible.
+ * fields untouched so the list envelope stays backward compatible. A High Lord
+ * house additionally surfaces its derived `planState` (addendum D4f).
  */
 export function buildHouseListSummary(
   db: VelarisDb,
   house: HouseDto,
-): { runtimeStatus: HouseRuntimeStatus; pendingApprovals: number } {
+): { runtimeStatus: HouseRuntimeStatus; pendingApprovals: number; planState?: HighLordPlanState } {
   const session = getActiveSessionForHouse(db, house.id);
   const runtimeStatus = deriveRuntimeStatus(session);
   const pendingApprovals = listApprovalRequests(db, {
     houseId: house.id,
     status: "pending",
   }).length;
-  return { runtimeStatus, pendingApprovals };
+  const planState =
+    house.kind === "high_lord" ? deriveHighLordPlanState(db, house.id) : undefined;
+  return {
+    runtimeStatus,
+    pendingApprovals,
+    ...(planState ? { planState } : {}),
+  };
 }

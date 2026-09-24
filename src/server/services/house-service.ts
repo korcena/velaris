@@ -11,7 +11,12 @@ import {
   type HouseCreateInput,
   type HouseUpdateInput,
 } from "@/shared/schemas/house";
-import type { HouseDto, HouseStatus, HouseConfiguration, HouseAgent } from "@/shared/types";
+import type {
+  HouseDto,
+  HouseStatus,
+  HouseConfiguration,
+  HouseAgent,
+} from "@/shared/types";
 import {
   createHouse as repoCreate,
   updateHouse as repoUpdate,
@@ -31,6 +36,18 @@ export {
   InvalidStatusTransitionError,
   HouseNotArchivedError,
 };
+
+/**
+ * The High Lord house is a singleton orchestrator that must not be disabled,
+ * archived or deleted via the API (addendum D1). Thrown in the service layer
+ * (web-write boundary) and mapped to 422 via `badTransition` in api-helpers.
+ */
+export class HighLordTransitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HighLordTransitionError";
+  }
+}
 
 /** Parse & create. Throws ZodError (→ 400) or repo errors (→ 409 handled in route). */
 export function createHouseService(db: VelarisDb, input: unknown): HouseDto {
@@ -60,7 +77,18 @@ export function updateHouseService(db: VelarisDb, id: string, input: unknown): H
 export function transitionHouseStatusService(db: VelarisDb, id: string, to: HouseStatus): HouseDto {
   // Rule enforcement lives in the repo (canTransition) — the service is the
   // named entry point for the status route.
+  guardHighLordTransition(db, id, to);
   return repoTransition(db, id, to);
+}
+
+/** The High Lord must stay active (addendum D1) — only `active` ⇄ `active` (no-op) escapes. */
+function guardHighLordTransition(db: VelarisDb, id: string, to: HouseStatus): void {
+  const house = getHouse(db, id);
+  if (house?.kind === "high_lord" && to !== "active") {
+    throw new HighLordTransitionError(
+      "The High Lord house cannot be disabled or archived — it is Velaris' orchestrator",
+    );
+  }
 }
 
 /** Validate a transition without mutating (used for pre-flight checks in the UI). */
@@ -72,12 +100,22 @@ export function getHouseService(db: VelarisDb, id: string): HouseDto | null {
   return getHouse(db, id);
 }
 
-export function listHousesService(db: VelarisDb, includeArchived: boolean): HouseDto[] {
-  return listHouses(db, { includeArchived });
+export function listHousesService(
+  db: VelarisDb,
+  includeArchived: boolean,
+  includeHighLord = false,
+): HouseDto[] {
+  return listHouses(db, { includeArchived, includeHighLord });
 }
 
-/** Delete only when archived (repo enforces). */
+/** Delete only when archived (repo enforces); the High Lord is never deletable. */
 export function deleteHouseService(db: VelarisDb, id: string): void {
+  const house = getHouse(db, id);
+  if (house?.kind === "high_lord") {
+    throw new HighLordTransitionError(
+      "The High Lord house cannot be deleted — it is Velaris' orchestrator",
+    );
+  }
   repoDelete(db, id);
 }
 

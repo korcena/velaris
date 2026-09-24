@@ -332,22 +332,13 @@ over-engineering the city → ship a static layout first, interactivity per hous
 
 **Goals:** Orchestrated multi-house execution.
 
-**Deliverables:** High Lord as special house (auto-created, kind='high_lord'); Court chat
-receives instructions; planning prompt pattern produces structured plan JSON (zod-validated);
-subtasks created with parent task links; handoffs (`handoffs` table: source, destination,
-task ref, instructions, context, artifacts, completion requirements); sequential + parallel
-DAG scheduling with dependency tracking; loop safeguards (max delegation depth, repeated-failure
-escalation to user); consolidated results on the parent task; usage rollup per task.
+**Deliverables (implemented, 2026-09-24):** High Lord as special house (auto-created `kind='high_lord'`); Court chat (`/high-lord`) receives instructions and steers an active plan; planning prompt pattern produces structured plan JSON (zod-validated); subtasks created with parent task links; handoffs table keyed by house ids (not agent ids); sequential + parallel DAG scheduling with dependency tracking; loop safeguards (max delegation depth = 1, max subtasks = 8 default, token budget); retry-then-abort replaces the escalation bird (a failed subtask retries up to 3× then aborts the plan with an `abortReason` on the parent's `execution_preferences`); consolidated results on the parent task; usage rollup per task; map gold-plating (gold High Lord castle at the city heart + burning overlay while aborted).
 
-**Acceptance criteria:** "Ask the High Lord to do X" produces a plan, delegates to ≥2 houses
-(one parallel pair), consolidates results; delegation loop attempts are capped and surfaced;
-user can bypass High Lord (direct assignment still works — regression-tested).
+**Acceptance criteria (ticked):** "Ask the High Lord to do X" produces a plan, delegates to ≥2 houses (one parallel pair), consolidates results. **Ticked 2026-09-24.** Delegation loop attempts are capped and surfaced; token budget enforced. Direct-to-house assignment still works (vitest + e2e regression green).
 
-**Test strategy:** Vitest for planner prompt/response parsing, DAG scheduler, safeguards;
-Playwright multi-house scenario; simulated agent fixtures for deterministic tests.
+**Test strategy:** Vitest for planner parsing, DAG scheduler, safeguards, plan-service, plan-depth; court-routes integration; Playwright `phase4-court.spec.ts` for the Court journey, aborted visuals, map gold, and the direct-assignment regression.
 
-**Risks:** plan JSON unreliability → strict zod + one repair retry + fallback to single-task;
-orchestrator runaway cost → max-subtask and token budgets per plan.
+**Risks:** plan JSON unreliability → strict zod + one repair retry + fallback to single-task; orchestrator runaway cost → max-subtask and token budgets per plan.
 
 ---
 

@@ -36,6 +36,13 @@ export interface MappedEvent {
   /** Provider message id — dedupe key for streaming deltas (message.updated /
    * part.updated for the same assistant message upsert one agent_messages row). */
   providerMessageId?: string;
+  /**
+   * Message metadata seen on a `message.updated` event: the provider message id
+   * + its role. `message.part.updated` events carry NO role, so the runner uses
+   * this to correlate which message a text part belongs to before ingesting it
+   * as an agent row (Defect C).
+   */
+  messageMeta?: { id: string; role: string };
 }
 
 export interface PendingApproval {
@@ -76,6 +83,7 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
     case "message.updated": {
       const info = (props.info ?? {}) as Record<string, unknown>;
       const role = typeof info.role === "string" ? info.role : "";
+      const msgId = extractMessageId(props);
       const text = extractMessageText((props.part ?? info) as Record<string, unknown> | undefined);
       // user messages mirror back the user's own prompt; only assistant text is new.
       if (role === "assistant" && text) {
@@ -83,11 +91,22 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
           ...base,
           type: "message",
           assistantText: text,
-          providerMessageId: extractMessageId(props),
+          providerMessageId: msgId,
+          messageMeta: msgId && role ? { id: msgId, role } : undefined,
           payload: { text },
         };
       }
-      return base; // drop non-assistant text
+      // Record the message's role for later part correlation even when there is
+      // no assistant text yet (e.g. the initial user message).
+      if (msgId && role) {
+        return {
+          ...base,
+          type: "unknown",
+          messageMeta: { id: msgId, role },
+          payload: { reason: "no_assistant_text", role },
+        };
+      }
+      return base; // drop non-assistant / unidentifiable text
     }
 
     case "message.part.updated": {
@@ -105,6 +124,9 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
                 : typeof part.messageID === "string"
                   ? (part.messageID as string)
                   : undefined;
+          // NOTE: `message.part.updated` carries NO role (verified live); the RUNNER
+          // correlates this part's messageID against the role captured on the
+          // `message.updated` event (messageMeta) and only ingests assistant text.
           return {
             ...base,
             type: "message",
@@ -131,6 +153,15 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
       return base; // tolerate any other part type as generic work
     }
 
+    case "message.part.delta": {
+      // Streaming text deltas (1.18.32) — the final text still arrives via
+      // message.part.updated. We do NOT upsert per-delta (the deltas share the
+      // message id with the final part, so upserting would race/truncate); we
+      // explicitly drop them with a documented reason to avoid DB noise while
+      // never breaking completion.
+      return { ...base, type: "unknown", payload: { reason: "streaming_delta", field: props.field, partType: (props.part as Record<string, unknown> | undefined)?.type ?? "" } };
+    }
+
     case "session.next.tool.called": {
       const call = extractToolCallDirect(props);
       return { ...base, type: "tool_call", payload: { tool: call } };
@@ -147,7 +178,8 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
       return { ...base, type: "tool_result" };
     }
 
-    case "permission.updated": {
+    case "permission.updated":
+    case "permission.asked": {
       const parsed = parsePermissionEvent(props);
       if (parsed) {
         return {
@@ -161,7 +193,8 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
       return { ...base, type: "approval_resolved" };
     }
 
-    case "question.updated": {
+    case "question.updated":
+    case "question.asked": {
       const parsed = parseQuestionEvent(props);
       if (parsed) {
         return {
@@ -171,6 +204,14 @@ export function mapProviderEvent(ev: ProviderEvent): MappedEvent | null {
           payload: parsed.payload,
         };
       }
+      return { ...base, type: "approval_resolved" };
+    }
+
+    case "permission.replied":
+    case "question.replied":
+    case "question.rejected": {
+      // A resolved approval — 1.18.32 *replied/*rejected events carry no pending
+      // request to surface; map to approval_resolved.
       return { ...base, type: "approval_resolved" };
     }
 

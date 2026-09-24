@@ -15,6 +15,9 @@ export type IsoTimestamp = string;
 
 export type HouseStatus = "active" | "disabled" | "archived";
 
+/** houses.kind values (echoed by ck_houses_kind). */
+export type HouseKind = "agent" | "high_lord";
+
 export type ExecutionProvider = (typeof EXECUTION_PROVIDERS)[number];
 
 export type PermissionMode = "allow" | "ask" | "deny";
@@ -52,6 +55,7 @@ export interface HouseDto {
   id: Id;
   name: string;
   description: string | null;
+  kind: HouseKind;
   status: HouseStatus;
   agent: HouseAgent;
   configuration: HouseConfiguration;
@@ -317,6 +321,8 @@ export interface HouseDetailDto extends HouseDto {
   pendingApprovals: number;
   /** Aggregated usage across all of a house's sessions (Phase 3). */
   usage: HouseUsageSummary;
+  /** Derived High Lord plan state (present on high_lord houses only — addendum D4f). */
+  planState?: HighLordPlanState;
 }
 
 /* --------------------------- Realtime / SSE ------------------------- */
@@ -330,6 +336,85 @@ export type RealtimeEvent =
   | { type: "hello"; cursor: number }
   | { type: "event"; event: ExecutionEventDto }
   | { type: "notification"; notification: NotificationDto };
+
+/* ---------------------- High Lord planning / Phase 4 ----------------- */
+
+/** subtasks.status values (echoed by ck_subtasks_status). */
+export type SubtaskStatus =
+  | "planned"
+  | "ready"
+  | "delegated"
+  | "in_flight"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+/** A single subtask row surfaced to the Court UI. */
+export interface SubtaskDto {
+  id: Id; // subtasks.id
+  parentTaskId: Id;
+  taskId: Id | null; // child task row (null until delegation)
+  orderIndex: number;
+  dependsOn: string[]; // plan-local ids (stable for UI keys/edges)
+  planId: string; // plan-local id ("s0") — stored in dependsOn
+  status: SubtaskStatus;
+  attemptCount: number;
+  title: string;
+  instructions: string;
+  completionRequirements: string;
+  houseId: Id | null; // resolved destination
+  houseName: string | null; // denormalized for the UI (join)
+  childTaskStatus: TaskStatus | null; // tasks.status of the child row
+  createdAt: IsoTimestamp;
+  updatedAt: IsoTimestamp;
+}
+
+/** A handoff row (High Lord → executor) surfaced to the Court UI. */
+export interface HandoffDto {
+  id: Id;
+  subtaskId: Id;
+  sourceHouseId: Id | null;
+  destinationHouseId: Id | null;
+  instructions: string;
+  context: Record<string, unknown>;
+  artifacts: string[];
+  completionRequirements: string;
+  createdAt: IsoTimestamp;
+}
+
+/** Consolidated result block present on a PlanDto when the parent is terminal. */
+export interface PlanConsolidatedResult {
+  summary: string | null;
+  fileCount: number;
+  diffPreview: string | null;
+}
+
+/** The full plan DTO for a parent task's Court board. */
+export interface PlanDto {
+  parentTaskId: Id;
+  parentTask: TaskDto;
+  subtasks: SubtaskDto[];
+  handoffs: HandoffDto[];
+  cost: CostSummary; // rollup across child usage_records
+  consolidated: PlanConsolidatedResult | null; // present when parent is terminal
+}
+
+/** Court chat history item. */
+export interface CourtMessageDto {
+  id: Id;
+  role: "user" | "agent";
+  content: string;
+  createdAt: IsoTimestamp;
+  taskId: Id | null;
+}
+
+/** Derived plan state on the High Lord's latest parent task (additive enrichment). */
+export type HighLordPlanState =
+  | "idle"
+  | "planning"
+  | "active"
+  | "aborted"
+  | "completed";
 
 /* --------------------------- UI preferences ------------------------- */
 

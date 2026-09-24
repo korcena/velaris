@@ -6,8 +6,9 @@
  */
 
 import { migrate } from "@/lib/db/migrate";
-import { getRawDb } from "@/lib/db";
+import { getDb, getRawDb } from "@/lib/db";
 import { seedDefaultProviderConfigs } from "@/server/repositories/provider-config-repo";
+import { seedHighLordHouse } from "@/server/repositories/house-repo";
 
 let _done = false;
 
@@ -15,6 +16,8 @@ export function bootstrapDb(): void {
   if (_done) return;
   migrate();
   seedDefaultProviderConfigs(getRawDb());
+  // Seed the singleton High Lord house (idempotent; never clobbers user edits).
+  seedHighLordHouse(getRawDb());
   _done = true;
 }
 

@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { createHouse } from "@/server/repositories/house-repo";
+import { createHouse, seedHighLordHouse } from "@/server/repositories/house-repo";
 import { createTask, getTask, setTaskStatus } from "@/server/repositories/task-repo";
 import {
   createExecutionSession,
@@ -26,6 +26,7 @@ import {
   setSessionStatus,
   getExecutionSession,
 } from "@/server/repositories/execution-repo";
+import { createSubtask } from "@/server/repositories/subtask-repo";
 import type { HouseConfiguration } from "@/shared/types";
 import { OpencodeClient } from "@/server/opencode";
 
@@ -160,5 +161,54 @@ describe("reconcile", () => {
     const log = vi.fn();
     await expect(reconcile(getDb(), getRawDb(), client, log)).resolves.toBeUndefined();
     expect(log.mock.calls.join(" ")).toMatch(/failed|complete/i);
+  });
+});
+
+/* ================================================================== */
+/* High Lord orchestrator reconcile pass (phase 4 §5.9 / D10.1)       */
+/* ================================================================== */
+
+describe("reconcile — High Lord pass", () => {
+  it("requeues a running HL parent that died before planning (no subtasks, no live session)", async () => {
+    const hl = seedHighLordHouse(getDb())!;
+    const parent = createTask(getDb(), { title: "Q", houseId: hl.id });
+    setTaskStatus(getDb(), parent.id, "running");
+
+    const client = makeClient();
+    await reconcile(getDb(), getRawDb(), client, () => {});
+    expect(getTask(getDb(), parent.id)?.status).toBe("queued");
+  });
+
+  it("leaves a running HL parent with a live plan (subtask rows) untouched", async () => {
+    const hl = seedHighLordHouse(getDb())!;
+    const parent = createTask(getDb(), { title: "Q", houseId: hl.id });
+    setTaskStatus(getDb(), parent.id, "running");
+    createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+
+    const client = makeClient();
+    await reconcile(getDb(), getRawDb(), client, () => {});
+    // The supervised plan is NOT requeued or interrupted by the generic handler.
+    expect(getTask(getDb(), parent.id)?.status).toBe("running");
+  });
+
+  it("flips a steering-busy HL planning session back to completed on restart", async () => {
+    const hl = seedHighLordHouse(getDb())!;
+    const parent = createTask(getDb(), { title: "Q", houseId: hl.id });
+    setTaskStatus(getDb(), parent.id, "running");
+    createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+
+    const session = createExecutionSession(getDb(), {
+      taskId: parent.id,
+      houseId: hl.id,
+      provider: "opencode",
+      modelId: "glm-5.3",
+    });
+    setSessionStatus(getDb(), session.id, "running"); // steering-busy
+
+    const client = makeClient();
+    await reconcile(getDb(), getRawDb(), client, () => {});
+    expect(getExecutionSession(getDb(), session.id)?.status).toBe("completed");
+    // Parent stays running (live plan) so the supervisor can continue.
+    expect(getTask(getDb(), parent.id)?.status).toBe("running");
   });
 });

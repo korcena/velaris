@@ -8,6 +8,7 @@
 
 import type {
   HouseStatus,
+  HouseKind,
   TaskPriority,
   TaskStatus,
   SessionStatus,
@@ -15,6 +16,7 @@ import type {
   ApprovalStatus,
   ArtifactKind,
   NotificationType,
+  SubtaskStatus,
 } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -203,6 +205,94 @@ export const DEFAULT_TASK_TYPES: readonly string[] = [
   "creative",
   "general",
 ] as const;
+
+/* ------------------------------------------------------------------ */
+/* High Lord orchestration / Phase 4                                  */
+/* ------------------------------------------------------------------ */
+
+/** houses.kind values (echoed by ck_houses_kind). */
+export const HOUSE_KINDS: readonly HouseKind[] = ["agent", "high_lord"] as const;
+
+/** subtasks.status values (echoed by ck_subtasks_status). */
+export const SUBTASK_STATUSES: readonly SubtaskStatus[] = [
+  "planned",
+  "ready",
+  "delegated",
+  "in_flight",
+  "completed",
+  "failed",
+  "cancelled",
+] as const;
+
+/**
+ * Loop safeguards (configurable later via the High Lord's house edit →
+ * executionPreferences).
+ */
+export const ORCHESTRATION_DEFAULTS = {
+  MAX_SUBTASKS: 8,
+  /** Total runs per subtask = 1 + MAX_SUBTASK_RETRIES. Replaces escalation. */
+  MAX_SUBTASK_RETRIES: 3,
+  /** Total plan budget (input+output) via usage_records rollup. */
+  PLAN_TOKEN_BUDGET: 400_000,
+} as const;
+
+/** Seeded High Lord house identity (used by web+engine boot seeds). */
+export const HIGH_LORD_SEED = {
+  HOUSE_NAME: "High Lord",
+  HOUSE_DESCRIPTION: "Velaris' orchestrator — plans, delegates, consolidates.",
+  AGENT_NAME: "Rhysand",
+  AGENT_ROLE: "High Lord · orchestrator",
+  /**
+   * Seeded High Lord configuration. Editable by the user via the standard house
+   * form — the seed only runs on absent rows, never clobbers user edits.
+   */
+  CONFIGURATION: {
+    executionProvider: "opencode",
+    aiProvider: "ollama-cloud",
+    modelId: "glm-5.3",
+    approvalPolicy: "never", // auto-approve so a planning call never blocks
+    concurrency: 1,
+  } as const,
+  /**
+   * Planning system prompt template. Editable by the user via the standard
+   * house edit form; the roster is appended per-run by the orchestrator so
+   * models/roster drift between runs is fine.
+   */
+  SYSTEM_PROMPT: `You are Rhysand, High Lord of the Velaris court and its orchestrator.
+
+You receive a single instruction from the mortal court. Your job is to decompose it
+into a concrete plan of subtasks that the houses of Velaris can execute in parallel
+where possible, honouring dependencies.
+
+You MUST reply with STRICT JSON ONLY — no prose, no markdown fences. The JSON must
+match exactly this shape:
+
+{
+  "subtasks": [
+    {
+      "id": "s0",
+      "title": "Short imperative title",
+      "description": "Optional detail",
+      "type": "general",
+      "houseId": null,
+      "houseHints": "Optional free-text capability hints",
+      "dependsOn": [],
+      "instructions": "Precise, self-contained execution instructions",
+      "context": {},
+      "artifacts": [],
+      "completionRequirements": ""
+    }
+  ]
+}
+
+Rules:
+- id values are plan-local ("s0","s1",...), unique and stable.
+- dependsOn references ONLY ids you define, and must form a DAG (no cycles).
+- Prefer parallel, independent subtasks so different houses can work concurrently.
+- Keep the plan small: at most 8 subtasks.
+- houseHints is free text (skills, domain, model) — the court assigns a house.
+- Each subtask's instructions must be executable by an agent without further context.`,
+} as const;
 
 /* ------------------------------------------------------------------ */
 /* Provider & execution constants                                      */

@@ -26,6 +26,8 @@ import {
   buildHouseDetail,
   buildHouseListSummary,
 } from "@/server/services/execution-service";
+import { getUsageSummaryForTask, createUsageRecord } from "@/server/repositories/execution-repo";
+import { createSubtask, linkChildTask } from "@/server/repositories/subtask-repo";
 
 let tmpDir: string;
 let dbPath: string;
@@ -178,5 +180,113 @@ describe("buildHouseListSummary", () => {
       message: "run",
     });
     expect(buildHouseListSummary(getDb(), house).pendingApprovals).toBe(1);
+  });
+});
+
+/* ================================================================== */
+/* getUsageSummaryForTask — High Lord parent usage rollup               */
+/* ================================================================== */
+
+describe("getUsageSummaryForTask", () => {
+  function seedSession(taskId: string): { sessionId: string; houseId: string } {
+    const h = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeConfig(),
+    });
+    const session = createExecutionSession(getDb(), {
+      taskId,
+      houseId: h.id,
+      provider: "opencode",
+      modelId: "glm-5.3",
+    });
+    return { sessionId: session.id, houseId: h.id };
+  }
+
+  it("rolls up the parent planning session + all child task usage rows", () => {
+    // Parent task with its own (planning) session usage.
+    const hlHouse = createHouse(getDb(), {
+      name: "HL",
+      description: null,
+      agent: { name: "HL", role: "HL" },
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Parent quest", houseId: hlHouse.id });
+    const parentSession = seedSession(parent.id);
+    createUsageRecord(getDb(), {
+      sessionId: parentSession.sessionId,
+      taskId: parent.id,
+      houseId: parentSession.houseId,
+      modelId: "glm-5.3",
+      provider: "opencode",
+      cost: { cost: 10, inputTokens: 1000, outputTokens: 500 },
+    });
+
+    // Two child tasks via subtasks linkage, each with usage rows (retries add rows).
+    const childA = createTask(getDb(), { title: "childA", houseId: hlHouse.id });
+    const childB = createTask(getDb(), { title: "childB", houseId: hlHouse.id });
+
+    const childASession = seedSession(childA.id);
+    createUsageRecord(getDb(), {
+      sessionId: childASession.sessionId,
+      taskId: childA.id,
+      houseId: childASession.houseId,
+      modelId: "glm-5.3",
+      provider: "opencode",
+      cost: { cost: 5, inputTokens: 500, outputTokens: 300 },
+    });
+
+    const childBSession = seedSession(childB.id);
+    createUsageRecord(getDb(), {
+      sessionId: childBSession.sessionId,
+      taskId: childB.id,
+      houseId: childBSession.houseId,
+      modelId: "glm-5.3",
+      provider: "opencode",
+      cost: { cost: 2, inputTokens: 200, outputTokens: 100 },
+    });
+
+    const sA = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "A",
+    });
+    linkChildTask(getDb(), sA.id, childA.id);
+    const sB = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s1",
+      orderIndex: 1,
+      dependsOn: [],
+      title: "B",
+    });
+    linkChildTask(getDb(), sB.id, childB.id);
+
+    const summary = getUsageSummaryForTask(getDb(), parent.id);
+    expect(summary.total).toBe(17); // 10 parent + 5 childA + 2 childB
+    expect(summary.inputTokens).toBe(1700);
+    expect(summary.outputTokens).toBe(900);
+    expect(summary.reasoningTokens).toBe(0);
+    expect(summary.cacheReadTokens).toBe(0);
+  });
+
+  it("returns a zeroed summary when the parent has no usage and no children", () => {
+    const hlHouse = createHouse(getDb(), {
+      name: "HL",
+      description: null,
+      agent: { name: "HL", role: "HL" },
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Parent quest", houseId: hlHouse.id });
+    const summary = getUsageSummaryForTask(getDb(), parent.id);
+    expect(summary).toEqual({
+      total: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+    });
   });
 });

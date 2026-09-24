@@ -260,8 +260,8 @@ The High Lord is a special house (`houses.kind='high_lord'`, auto-created in Pha
    dependsOn: [ids], instructions, context, artifacts, completionRequirements }] }`.
    One repair retry on schema failure; fallback = single subtask for the best-matching house.
 3. **Delegate**: each subtask becomes a `tasks` row linked via `subtasks` (parent_task_id,
-   order_index, depends_on). `handoffs` rows carry source/destination agent ids, instructions,
-   context, artifacts, completion requirements.
+    order_index, depends_on). `handoffs` rows carry source/destination **house ids** (not agent
+    ids), instructions, context, artifacts, completion requirements.
 4. **Schedule**: DAG execution — subtasks with unmet dependencies stay `queued`;
    independent branches run in parallel (different houses/directories; §2.1 serialization
    applies per directory).
@@ -270,9 +270,21 @@ The High Lord is a special house (`houses.kind='high_lord'`, auto-created in Pha
    consolidated summary on the parent task (results, files, diffs, cost rollup).
 
 **Loop safeguards:** max delegation depth = 1 (High Lord subtasks may not be re-delegated to
-the High Lord); max subtasks per plan (default 8, configurable); repeated-failure rule — a
-house failing the same subtask twice escalates to the user as a clarification bird instead
-of a third attempt; total plan token budget enforced via `usage_records` rollup.
+the High Lord); max subtasks per plan (default 8, per-parent `executionPreferences.maxSubtasks`);
+total plan token budget enforced via `usage_records` rollup (per-parent `tokenBudget`). A failed
+subtask is retried (fresh child task rows) up to `ORCHESTRATION_DEFAULTS.MAX_SUBTASK_RETRIES` (3);
+retry exhaustion or a token-budget breach **aborts the entire plan** — children cancelled,
+parent `failed` with `execution_preferences.plan.abortReason`, partial consolidated output
+preserved, and burning-house visuals on the Court + map. (The escalation-bird design from the
+Phase 4 preview is removed — retry-then-abort replaces it.)
+
+**Steering (in v1):** while a plan is active, Court chat messages reach the High Lord's resumable
+planning session (via `POST /api/court/steer` writing an `agent_messages` row the orchestrator
+relays); a plan-shaped reply revises the DAG (terminal subtasks untouched; a new subtask is
+planned when its title doesn't match an existing one).
+
+**Subtask statuses:** `planned | ready | delegated | in_flight | completed | failed | cancelled`
+(orchestrator-owned scheduling state, distinct from the child task row's `tasks.status`).
 
 **Phase 1 schema readiness** (already satisfied by ARCHITECTURE §6.1/§6.2): tasks carry
 optional `house_id`/`project_id` (no orchestrator coupling), `subtasks.parent_task_id` +

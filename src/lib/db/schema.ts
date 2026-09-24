@@ -426,6 +426,86 @@ export const usageRecords = sqliteTable(
   ],
 );
 
+/* ------------------------------------------------------------------ */
+/* subtasks (Phase 4 — High Lord orchestration)                        */
+/* ------------------------------------------------------------------ */
+/*                                                                     */
+/* Orchestrator-owned scheduling state, deliberately distinct from the  */
+/* child task row's tasks.status (which the runner owns). Plan-local   */
+/* ids are stored in `plan_id` ("s0","s1",...) so depends_on JSON edges */
+/* stay renderable after delegation. The unique task_id index makes    */
+/* the subtask↔child-task link 1:1, enforcing max delegation depth 1.  */
+/* ------------------------------------------------------------------ */
+
+export const subtasks = sqliteTable(
+  "subtasks",
+  {
+    id: text("id").primaryKey(),
+    parentTaskId: text("parent_task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    taskId: text("task_id").references(() => tasks.id, { onDelete: "cascade" }), // the child task row (null until delegation)
+    orderIndex: integer("order_index").notNull(), // plan order (0..n-1)
+    dependsOn: text("depends_on").notNull().default("[]"), // JSON: [plan-local ids] (plan-graph edges)
+    status: text("status").notNull().default("planned"), // orchestrator-owned lifecycle
+    attemptCount: integer("attempt_count").notNull().default(0), // repeated-failure rule
+    planId: text("plan_id").notNull(), // plan-local identity ("s0","s1",...) assigned by the planner
+    title: text("title").notNull(),
+    instructions: text("instructions").notNull().default(""),
+    completionRequirements: text("completion_requirements").notNull().default(""),
+    createdAt: text("created_at").notNull().default(now()),
+    updatedAt: text("updated_at").notNull().default(now()),
+  },
+  (t) => [
+    uniqueIndex("idx_subtasks_task").on(t.taskId), // 1:1 child task ↔ subtask row
+    index("idx_subtasks_parent").on(t.parentTaskId),
+    uniqueIndex("idx_subtasks_parent_plan").on(t.parentTaskId, t.planId),
+    check(
+      "ck_subtasks_status",
+      sql`status in ('planned','ready','delegated','in_flight','completed','failed','cancelled')`,
+    ),
+    check("ck_subtasks_order", sql`order_index >= 0`),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* handoffs (Phase 4 — High Lord orchestration)                        */
+/* ------------------------------------------------------------------ */
+/*                                                                     */
+/* One row per subtask, created at delegation time. Keyed by house ids  */
+/* (MVP: 1 house = 1 agent). source_house_id is normally the High Lord, */
+/* destination_house_id the executor. destination is nullable on delete */
+/* so history survives a house being archived+deleted.                 */
+/* ------------------------------------------------------------------ */
+
+export const handoffs = sqliteTable(
+  "handoffs",
+  {
+    id: text("id").primaryKey(),
+    parentTaskId: text("parent_task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    subtaskId: text("subtask_id")
+      .notNull()
+      .references(() => subtasks.id, { onDelete: "cascade" }),
+    sourceHouseId: text("source_house_id").references(() => houses.id, {
+      onDelete: "set null",
+    }), // High Lord
+    destinationHouseId: text("destination_house_id")
+      .notNull()
+      .references(() => houses.id, { onDelete: "set null" }), // executor
+    instructions: text("instructions").notNull().default(""),
+    context: text("context").notNull().default("{}"), // JSON
+    artifacts: text("artifacts").notNull().default("[]"), // JSON: expected artifact refs
+    completionRequirements: text("completion_requirements").notNull().default(""),
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_handoffs_subtask").on(t.subtaskId),
+    index("idx_handoffs_parent").on(t.parentTaskId),
+  ],
+);
+
 /* ---------------------------------------------------------------- */
 /* Export row types                                                 */
 /* ---------------------------------------------------------------- */
@@ -470,3 +550,9 @@ export type NotificationNew = typeof notifications.$inferInsert;
 
 export type UsageRecordRow = typeof usageRecords.$inferSelect;
 export type UsageRecordNew = typeof usageRecords.$inferInsert;
+
+export type SubtaskRow = typeof subtasks.$inferSelect;
+export type SubtaskNew = typeof subtasks.$inferInsert;
+
+export type HandoffRow = typeof handoffs.$inferSelect;
+export type HandoffNew = typeof handoffs.$inferInsert;

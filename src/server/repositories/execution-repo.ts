@@ -26,6 +26,7 @@ import {
   notifications,
   artifacts,
   usageRecords,
+  subtasks,
   type ExecutionSessionRow,
   type ExecutionEventRow,
   type ApprovalRequestRow,
@@ -881,5 +882,56 @@ export function getUsageSummaryForHouse(
     reasoningTokens: num(row?.reasoningTokens),
     cacheReadTokens: num(row?.cacheReadTokens),
     sessions: num(row?.sessions),
+  };
+}
+
+/**
+ * Aggregated usage rollup for a High Lord parent task: SUM over usage_records
+ * WHERE task_id IN (the parent task + all its child task ids). Used for the
+ * parent cost rollup in the PlanDto and per-tick token-budget enforcement.
+ *
+ * Children are resolved via the subtasks table in a single query (subselect);
+ * every usage row for the parent's planning session is included by the parent's
+ * taskId, plus each child task's rows (retries add rows — intended; budget
+ * counts real spend per the plan's usage-rollup risk note).
+ */
+export function getUsageSummaryForTask(
+  db: VelarisDb,
+  parentTaskId: string,
+): CostSummary {
+  const row = db
+    .select({
+      cost: sum(usageRecords.cost),
+      inputTokens: sum(usageRecords.inputTokens),
+      outputTokens: sum(usageRecords.outputTokens),
+      reasoningTokens: sum(usageRecords.reasoningTokens),
+      cacheReadTokens: sum(usageRecords.cacheReadTokens),
+    })
+    .from(usageRecords)
+    .where(
+      sql`${usageRecords.taskId} IN (
+        SELECT ${parentTaskId}
+        UNION
+        SELECT task_id FROM subtasks WHERE parent_task_id = ${parentTaskId}
+      )`,
+    )
+    .get();
+
+  const num = (v: unknown): number => {
+    if (typeof v === "number") return v;
+    if (typeof v === "bigint") return Number(v);
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  return {
+    total: num(row?.cost),
+    inputTokens: num(row?.inputTokens),
+    outputTokens: num(row?.outputTokens),
+    reasoningTokens: num(row?.reasoningTokens),
+    cacheReadTokens: num(row?.cacheReadTokens),
   };
 }

@@ -24,6 +24,14 @@ import {
 } from "@/shared/schemas/provider-config";
 import { taskCreateSchema, taskUpdateSchema } from "@/shared/schemas/task";
 import { uuidSchema, trimmedNonEmpty, parseJson } from "@/shared/schemas/common";
+import {
+  planSchema,
+  planSubtaskSchema,
+  courtInstructionSchema,
+  courtSteerSchema,
+  planExecutionPreferencesSchema,
+} from "@/shared/schemas/plan";
+import { ORCHESTRATION_DEFAULTS } from "@/shared/constants";
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -522,6 +530,144 @@ describe("taskUpdateSchema", () => {
     for (const status of ["running", "completed", "failed", "planning"]) {
       expect(() => taskUpdateSchema.parse({ status })).toThrow();
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* High Lord plan & court schemas (Phase 4)                            */
+/* ------------------------------------------------------------------ */
+
+/** A valid, minimal plan the planner might emit for unit coverage. */
+const validPlan = {
+  subtasks: [
+    {
+      id: "s0",
+      title: "Research the wards",
+      description: "Map the outer wall defences",
+      dependsOn: [],
+      instructions: "Investigate the gates.",
+    },
+    {
+      id: "s1",
+      title: "Forge the keys",
+      dependsOn: ["s0"],
+      houseHints: "smithy, metalwork",
+      artifacts: ["keys.md"],
+    },
+  ],
+};
+
+describe("planSchema / planSubtaskSchema", () => {
+  it("parses a valid multi-subtask plan with dependencies", () => {
+    const out = planSchema.parse(validPlan);
+    expect(out.subtasks).toHaveLength(2);
+    expect(out.subtasks[0].id).toBe("s0");
+    expect(out.subtasks[0].description).toBe("Map the outer wall defences");
+    expect(out.subtasks[1].dependsOn).toEqual(["s0"]);
+    // applied defaults
+    expect(out.subtasks[0].context).toEqual({});
+    expect(out.subtasks[0].artifacts).toEqual([]);
+    expect(out.subtasks[0].completionRequirements).toBe("");
+    expect(out.subtasks[0].instructions).toBe("Investigate the gates.");
+  });
+
+  it("rejects an empty subtasks array (min 1)", () => {
+    expect(() => planSchema.parse({ subtasks: [] })).toThrow(/at least one/);
+  });
+
+  it("rejects over-cap subtasks (ORCHESTRATION_DEFAULTS.MAX_SUBTASKS)", () => {
+    const tooMany = Array.from({ length: ORCHESTRATION_DEFAULTS.MAX_SUBTASKS + 1 }, (_, i) => ({
+      id: `s${i}`,
+      title: `Task ${i}`,
+    }));
+    expect(() => planSchema.parse({ subtasks: tooMany })).toThrow(/at most 8/);
+  });
+
+  it("accepts exactly MAX_SUBTASKS", () => {
+    const max = Array.from({ length: ORCHESTRATION_DEFAULTS.MAX_SUBTASKS }, (_, i) => ({
+      id: `s${i}`,
+      title: `Task ${i}`,
+    }));
+    expect(planSchema.parse({ subtasks: max }).subtasks).toHaveLength(max.length);
+  });
+
+  it("rejects a dependency referencing a non-min-1 plan id", () => {
+    expect(() =>
+      planSubtaskSchema.parse({ id: "s0", title: "x", dependsOn: [""] }),
+    ).toThrow();
+  });
+
+  it("rejects a whitespace-only title / missing id", () => {
+    expect(() => planSubtaskSchema.parse({ id: "", title: "x" })).toThrow();
+    expect(() => planSubtaskSchema.parse({ id: "s0", title: "   " })).toThrow();
+  });
+
+  it("rejects a non-uuid explicit houseId", () => {
+    expect(() =>
+      planSubtaskSchema.parse({ id: "s0", title: "x", houseId: "not-a-uuid" }),
+    ).toThrow(/UUID/);
+  });
+
+  it("accepts a null explicit houseId (fall back to hints)", () => {
+    const out = planSubtaskSchema.parse({ id: "s0", title: "x", houseId: null });
+    expect(out.houseId).toBeNull();
+  });
+});
+
+describe("courtInstructionSchema", () => {
+  it("parses a minimal instruction with defaults", () => {
+    const out = courtInstructionSchema.parse({ instruction: "Build me a wall" });
+    expect(out.instruction).toBe("Build me a wall");
+    // Optional/nullable fields are absent, not coerced, when omitted.
+    expect(out.projectId).toBeUndefined();
+    expect(out.workingDirectory).toBeUndefined();
+    expect(out.priority).toBeUndefined();
+  });
+
+  it("rejects an empty / whitespace-only instruction", () => {
+    expect(() => courtInstructionSchema.parse({ instruction: "" })).toThrow();
+    expect(() => courtInstructionSchema.parse({ instruction: "   " })).toThrow(/empty/);
+  });
+
+  it("rejects an unknown priority", () => {
+    expect(() =>
+      courtInstructionSchema.parse({ instruction: "x", priority: "critical" }),
+    ).toThrow();
+  });
+
+  it("rejects non-uuid projectId", () => {
+    expect(() =>
+      courtInstructionSchema.parse({ instruction: "x", projectId: "nope" }),
+    ).toThrow(/UUID/);
+  });
+});
+
+describe("courtSteerSchema", () => {
+  const good = "0b8d6e7f-3a2b-4c5d-9e8f-1a2b3c4d5e6f";
+
+  it("parses a valid steer", () => {
+    const out = courtSteerSchema.parse({ parentTaskId: good, message: "Also add tests" });
+    expect(out.parentTaskId).toBe(good);
+    expect(out.message).toBe("Also add tests");
+  });
+
+  it("rejects a missing message / non-uuid parentTaskId", () => {
+    expect(() => courtSteerSchema.parse({ parentTaskId: good })).toThrow();
+    expect(() => courtSteerSchema.parse({ parentTaskId: "nope", message: "x" })).toThrow(/UUID/);
+  });
+});
+
+describe("planExecutionPreferencesSchema", () => {
+  it("is partial / permissive (internal engine write shape, documented only)", () => {
+    const empty = planExecutionPreferencesSchema.parse({});
+    expect(empty).toEqual({});
+    const full = planExecutionPreferencesSchema.parse({
+      abortReason: "retries_exhausted",
+      abortedAt: "2026-09-23T00:00:00.000Z",
+    });
+    expect(full.abortReason).toBe("retries_exhausted");
+    const partial = planExecutionPreferencesSchema.parse({ abortReason: "user_cancel" });
+    expect(partial.abortedAt).toBeUndefined();
   });
 });
 

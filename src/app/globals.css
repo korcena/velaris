@@ -640,3 +640,190 @@ html.velaris-reduced-motion *::after {
   letter-spacing: 2px;
 }
 
+/* =================================================================== */
+/* High Lord map gold-plating + burning (Phase 4 addendum D3/D4)         */
+/* transform/opacity only; reduced-motion static variants.               */
+/* =================================================================== */
+
+/* Gold/gilded High Lord castle: override the palette vars with fixed gold
+   tones so the throne reads distinctly at the city heart. */
+.castle[data-kind="high_lord"] {
+  --keep-light: #f6dfa0;
+  --keep-base: #e8c66b;
+  --keep-dark: #b8923f;
+  --roof-light: #f8e6b0;
+  --roof-base: #ddb85a;
+  --roof-dark: #9a7830;
+  --tower-light: #f2d793;
+  --tower-base: #d9b75f;
+  --tower-dark: #a98a3c;
+  --window-glow: #fff0b3;
+  --window-glow-soft: #ffd97a;
+}
+.castle[data-kind="high_lord"] .castle-label {
+  color: #e8c66b;
+}
+
+/* Burning overlay while the High Lord's latest plan is aborted (D4e(b)).
+   Positioned over the keep; embers via opacity/translate flicker. */
+.castle-burning {
+  position: absolute;
+  left: -24px;
+  top: -64px;
+  width: 48px;
+  height: 78px;
+  pointer-events: none;
+}
+.castle-burning-static {
+  background: rgba(227, 106, 106, 0.35);
+  border: 1px solid #e36a6a66;
+  border-radius: 2px;
+}
+.castle-burning-smoke {
+  position: absolute;
+  left: 14px;
+  top: -16px;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgba(80, 84, 100, 0.5);
+  opacity: 0;
+  transform-origin: center;
+  animation: velaris-burn-smoke 2.4s ease-out infinite;
+}
+.castle-burning-smoke:nth-of-type(2) { animation-delay: 0.8s; }
+.castle-burning-smoke:nth-of-type(3) { animation-delay: 1.6s; }
+.castle-burning-flame {
+  position: absolute;
+  left: calc(50% - 5px);
+  top: 44px;
+  width: 8px;
+  height: 12px;
+  border-radius: 50% 50% 50% 50%;
+  background: radial-gradient(circle at 50% 80%, #ffd97a 0%, #e36a6a 70%);
+  opacity: 0.9;
+  transform-origin: center bottom;
+  animation: velaris-burn-flicker 0.7s ease-in-out infinite;
+}
+.castle-burning-flame:nth-of-type(2) { left: calc(50% - 12px); animation-delay: 0.1s; }
+.castle-burning-flame:nth-of-type(3) { left: calc(50% + 4px); animation-delay: 0.3s; }
+
+@keyframes velaris-burn-smoke {
+  0% { opacity: 0; transform: translateY(0) scale(0.5); }
+  40% { opacity: 0.6; }
+  100% { opacity: 0; transform: translateY(-18px) scale(1.1); }
+}
+@keyframes velaris-burn-flicker {
+  0%, 100% { opacity: 0.7; transform: scaleY(1); }
+  50% { opacity: 1; transform: scaleY(1.25); }
+}
+
+/* =================================================================== */
+/* Court abort visual (Phase 4 addendum D4e(a))                         */
+/* transform/opacity only; reduced-motion static banner.               */
+/* =================================================================== */
+
+.court-abort {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(227, 106, 106, 0.4);
+  background: linear-gradient(180deg, rgba(227, 106, 106, 0.18), rgba(227, 106, 106, 0.08));
+  padding: 0.75rem 1rem;
+  overflow: hidden;
+  position: relative;
+}
+.court-abort-static {
+  background: linear-gradient(180deg, rgba(80, 84, 100, 0.35), rgba(80, 84, 100, 0.15));
+  border-color: rgba(227, 106, 106, 0.4);
+}
+.court-abort-flame-static {
+  width: 18px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50% 50% 50% 50%;
+  background: #e36a6a;
+  display: inline-block;
+}
+.court-abort-copy {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--color-crimson, #e36a6a);
+}
+/* Burning castle strip (animated) */
+.court-abort-burning {
+  position: relative;
+  width: 44px;
+  height: 46px;
+  flex-shrink: 0;
+}
+.court-abort-keep {
+  position: absolute;
+  left: 8px;
+  bottom: 0;
+  width: 28px;
+  height: 34px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, #7a5c2a, #4a3620);
+  border: 1px solid #0008;
+}
+.court-abort-flame {
+  position: absolute;
+  bottom: 30px;
+  left: 8px;
+  width: 9px;
+  height: 14px;
+  transform-origin: center bottom;
+}
+.court-abort-flame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50% 50% 50% 50%;
+  background: radial-gradient(circle at 50% 80%, #ffd97a 0%, #e36a6a 75%);
+  animation: velaris-court-fire 0.8s ease-in-out infinite;
+}
+.court-abort-flame:nth-of-type(2) { left: 17px; animation-delay: 0.2s; }
+.court-abort-flame:nth-of-type(3) { left: 26px; animation-delay: 0.4s; }
+.court-abort-ember {
+  position: absolute;
+  left: 10px;
+  bottom: 44px;
+  width: 3px;
+  height: 3px;
+  border-radius: 9999px;
+  background: #ffd97a;
+  opacity: 0;
+  animation: velaris-court-ember 1.6s ease-out infinite;
+}
+.court-abort-ember:nth-of-type(2) { left: 20px; animation-delay: 0.4s; }
+.court-abort-ember:nth-of-type(3) { left: 30px; animation-delay: 0.8s; }
+.court-abort-ember:nth-of-type(4) { left: 26px; animation-delay: 1.1s; }
+.court-abort-ember:nth-of-type(5) { left: 14px; animation-delay: 1.3s; }
+.court-abort-smoke {
+  position: absolute;
+  left: 16px;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgba(80, 84, 100, 0.5);
+  opacity: 0;
+  transform-origin: center;
+  animation: velaris-burn-smoke 3s ease-out infinite;
+}
+.court-abort-smoke:nth-of-type(2) { left: 26px; animation-delay: 1s; }
+.court-abort-smoke:nth-of-type(3) { left: 8px; animation-delay: 2s; }
+
+@keyframes velaris-court-fire {
+  0%, 100% { opacity: 0.75; transform: scaleY(1); }
+  50% { opacity: 1; transform: scaleY(1.3); }
+}
+@keyframes velaris-court-ember {
+  0% { opacity: 0; transform: translateY(0); }
+  30% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-10px); }
+}
+
+

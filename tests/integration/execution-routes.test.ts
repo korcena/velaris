@@ -40,7 +40,11 @@ import { POST as createTaskRoute } from "@/app/api/tasks/route";
 import { GET as getModels } from "@/app/api/models/route";
 
 import { createExecutionSession, createExecutionEvent, createApprovalRequest, createNotification, createAgentMessage } from "@/server/repositories/execution-repo";
-import { setTaskStatus } from "@/server/repositories/task-repo";
+import { setTaskStatus, getTask, createTask as repoCreateTask } from "@/server/repositories/task-repo";
+import { seedHighLordHouse } from "@/server/repositories/house-repo";
+import { migrate } from "@/lib/db/migrate";
+import { createSubtask, linkChildTask } from "@/server/repositories/subtask-repo";
+import { createHandoff } from "@/server/repositories/handoff-repo";
 
 const BASE = "http://localhost:3000";
 let tmpDir: string;
@@ -433,6 +437,29 @@ describe("POST /api/tasks/{id}/cancel", () => {
     const missing = randomUUID();
     const res = await cancelTask(req(`${BASE}/api/tasks/${missing}/cancel`, { method: "POST" }), idCtx(missing));
     expect(res.status).toBe(404);
+  });
+
+  it("HL parent cancel persists abortReason=user_cancel so the burning UI renders (M1)", async () => {
+    migrate(); // ensure schema exists before seeding the HL house directly
+    // Seed a High Lord parent with a subtask + handoff + child task.
+    const hl = seedHighLordHouse(getDb())!;
+    const house = await createHouse();
+    const parent = repoCreateTask(getDb(), { title: "Quest", houseId: hl.id });
+    setTaskStatus(getDb(), parent.id, "running");
+    const sub = createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+    const child = repoCreateTask(getDb(), { title: "child", houseId: house.id, workingDirectory: tmpDir });
+    linkChildTask(getDb(), sub.id, child.id);
+    createHandoff(getDb(), { parentTaskId: parent.id, subtaskId: sub.id, destinationHouseId: house.id });
+    setTaskStatus(getDb(), child.id, "running");
+
+    const res = await cancelTask(req(`${BASE}/api/tasks/${parent.id}/cancel`, { method: "POST" }), idCtx(parent.id));
+    expect(res.status).toBe(200);
+
+    const fresh = getTask(getDb(), parent.id)!;
+    const prefs = fresh.executionPreferences as Record<string, unknown>;
+    // Addendum D4e(b)/D4f: user cancel → abortReason present so Court + map burn.
+    expect((prefs.plan as any)?.abortReason).toBe("user_cancel");
+    expect(typeof (prefs.plan as any)?.abortedAt).toBe("string");
   });
 });
 

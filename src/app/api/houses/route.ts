@@ -11,11 +11,12 @@ import { created, ok, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/houses?includeArchived=false */
+/** GET /api/houses?includeArchived=false&includeHighLord=false */
 export async function GET(req: NextRequest) {
   bootstrapDb();
   const includeArchived = req.nextUrl.searchParams.get("includeArchived") === "true";
-  const houses = listHousesService(getDb(), includeArchived);
+  const includeHighLord = req.nextUrl.searchParams.get("includeHighLord") === "true";
+  const houses = listHousesService(getDb(), includeArchived, includeHighLord);
   // Enrich each house with the runtime status + pending approval count for the
   // house-card bird indicator. The envelope stays `{ houses: [...] }` and each
   // entry is the plain HouseDto plus `runtimeStatus` / `pendingApprovals`.

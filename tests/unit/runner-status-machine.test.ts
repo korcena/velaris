@@ -484,4 +484,72 @@ describe("executeTask — status machine", () => {
 
     ac.abort();
   });
+
+  it("subscribes SSE to the provider-RESOLVED directory when it differs from the task dir (Defect A belt-and-braces)", async () => {
+    const { db, raw, house, task } = seedRun();
+    // getSession reports a resolved directory DIFFERENT from the task's working_directory.
+    const subscribedDirs: string[] = [];
+    const fc = makeFakeClient(async () => ({
+      id: "prov-1",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0 },
+      model: { id: "", providerID: "" },
+      time: { created: 0, updated: Date.now() },
+      title: "",
+      directory: "/provider/resolved/dir", // provider's actual session directory
+    }));
+    // Keep the task from completing: quiet watchdog with a long quiet window.
+    const adapter = makeFakeAdapter();
+    const origSubscribe = fc.client.subscribeEvents;
+    fc.client.subscribeEvents = vi.fn((dir: string, opts: { onEvent: (ev: unknown) => void }) => {
+      subscribedDirs.push(dir);
+      return origSubscribe(dir, opts);
+    }) as never;
+
+    const ac = new AbortController();
+    const promise = executeTask(
+      { db, raw, adapter: adapter as never, client: fc.client as never, task, house, directory: tmpDir, modelId: "m" },
+      { pollMs: 20, completionQuietMs: 100_000, timeoutMs: 30_000, signal: ac.signal },
+    );
+
+    await new Promise((r) => setTimeout(r, 60)); // let start + getSession + subscribe fire
+    expect(subscribedDirs).toEqual(["/provider/resolved/dir"]);
+
+    ac.abort();
+    await promise;
+  });
+
+  it("does NOT ingest the user's own prompt as an agent row (Defect C role correlation)", async () => {
+    const { db, raw, house, task } = seedRun();
+    // A user message followed by its text part; the assistant message + its part.
+    // The user's text part shares the USER message id → must NOT be ingested.
+    const userMsgId = "msg_user";
+    const assisMsgId = "msg_assist";
+    const fc = makeFakeClient(quietSession());
+
+    const ac = new AbortController();
+    const promise = executeTask(
+      { db, raw: getRawDb(), adapter: makeFakeAdapter() as never, client: fc.client as never, task, house, directory: tmpDir, modelId: "m" },
+      { pollMs: 20, completionQuietMs: 100, timeoutMs: 30_000, signal: ac.signal },
+    );
+
+    await waitForSubscribed(fc);
+    // 1. message.updated for a USER message (role captured), then its text part.
+    fc.emit({ id: "e", type: "message.updated", properties: { sessionID: "prov-1", info: { id: userMsgId, role: "user" } } });
+    fc.emit({ id: "e", type: "message.part.updated", properties: { sessionID: "prov-1", part: { type: "text", text: "the user's own composed prompt should not be an agent row", messageID: userMsgId } } });
+    await flush();
+
+    // 2. message.updated for the ASSISTANT message, then its text part.
+    fc.emit({ id: "e", type: "message.updated", properties: { sessionID: "prov-1", info: { id: assisMsgId, role: "assistant" } } });
+    fc.emit({ id: "e", type: "message.part.updated", properties: { sessionID: "prov-1", part: { type: "text", text: "Real assistant answer", messageID: assisMsgId } } });
+    await flush();
+
+    // The run completes; only the assistant text landed as an agent row.
+    await promise;
+    const rows = (raw.prepare("SELECT content, role FROM agent_messages ORDER BY id").all() as { content: string; role: string }[]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].role).toBe("agent");
+    expect(rows[0].content).toBe("Real assistant answer");
+    ac.abort();
+  });
 });

@@ -25,6 +25,8 @@ import {
 } from "@/server/repositories/task-repo";
 import { createExecutionEvent, getActiveSessionForHouse } from "@/server/repositories/execution-repo";
 import { resolveSafePath, isPathAllowed } from "@/lib/paths";
+import { runParent, tickActivePlans } from "./orchestrator";
+import type { OrchestratorDeps } from "./orchestrator";
 
 export interface QueueDeps {
   db: VelarisDb;
@@ -100,6 +102,17 @@ export class TaskQueue {
         this.inFlight.delete(taskId);
       });
     }
+
+    // Supervisor pass: reconcile/advance active High Lord plans (mirror child
+    // terminal states, release dependents, steer, budget, consolidate).
+    const orchestratorDeps: OrchestratorDeps = {
+      db,
+      raw,
+      adapter: this.deps.adapter,
+      client: this.deps.client,
+      log: this.deps.log,
+    };
+    await tickActivePlans(orchestratorDeps);
   }
 
   /** Execute an already-claimed task. */
@@ -140,6 +153,22 @@ export class TaskQueue {
     this.houseBusy.add(house.id);
 
     try {
+      // High Lord house → route to the orchestrator (planning + delegation) instead
+      // of the normal runner. The orchestrator bypasses resolveWorkspace (the HL
+      // seed has an empty allowlist; the planning "workspace" is the chat).
+      if (house.kind === "high_lord") {
+        this.deps.log(`[queue] routing ${task.title} to the High Lord orchestrator`);
+        const orchestratorDeps: OrchestratorDeps = {
+          db,
+          raw,
+          adapter,
+          client,
+          log: this.deps.log,
+        };
+        await runParent(task, house, orchestratorDeps, { signal });
+        return;
+      }
+
       // Workspace safety: resolve + allowlist. resolveWorkspace sets the task
       // to failed/queued itself when it cannot run.
       const resolvedDir = this.resolveWorkspace(db, task, house);

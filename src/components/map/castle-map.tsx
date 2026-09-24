@@ -121,7 +121,9 @@ export function CastleMap() {
   // ---- Data load (live, refetch keyed on the realtime stream sequence) ----
   const load = useCallback(async () => {
     try {
-      const res = await apiFetch<{ houses: HouseCardData[] }>("/api/houses?includeArchived=true");
+      const res = await apiFetch<{ houses: HouseCardData[] }>(
+        "/api/houses?includeArchived=true&includeHighLord=true",
+      );
       setHouses(res.houses);
     } catch {
       setHouses([]);

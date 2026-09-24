@@ -52,7 +52,7 @@ export function describeExecutionEvent(ev: ExecutionEventDto): ActivityItem | nu
     case "session_started":
       return { kind: "system", tone: "muted", label: "Session opened" };
     case "message":
-      return { kind: "text", tone: "default", label: "Message", text: str(p, "text") };
+      return describePlanMessage(p);
     case "tool_call": {
       const tool = p.tool as Record<string, unknown> | undefined;
       const toolName = typeof tool?.tool === "string" ? tool.tool : "tool";
@@ -94,4 +94,60 @@ export function describeExecutionEvent(ev: ExecutionEventDto): ActivityItem | nu
     default:
       return null;
   }
+}
+
+/**
+ * Describe a High Lord plan-flavored `message` event (Phase 4 §6). The
+ * orchestrator writes execution_events of type `message` with structured
+ * payload keys (plan / subtask / revision / budget / steer) so the Court board
+ * and the High Lord's house Activity tab read well. Non-plan messages fall
+ * back to the generic text label.
+ */
+function describePlanMessage(
+  p: Record<string, unknown>,
+): ActivityItem {
+  if (p.plan === true) {
+    // A plan was drafted / revised.
+    const subtasks = p.subtasks as Array<{ planId?: string; title?: string; house?: unknown }> | undefined;
+    if (subtasks && subtasks.length > 0) {
+      return {
+        kind: "text",
+        tone: "gold",
+        label: `Plan drafted — ${subtasks.length} subtask${subtasks.length === 1 ? "" : "s"}`,
+        text: subtasks.map((s) => `${s.planId ?? "?"}: ${s.title ?? ""}`).join("\n"),
+      };
+    }
+    if (p.revision === true) {
+      const added = Array.isArray(p.added) ? (p.added as string[]).length : 0;
+      const cancelled = Array.isArray(p.cancelled) ? (p.cancelled as string[]).length : 0;
+      const changed = Array.isArray(p.changed) ? (p.changed as string[]).length : 0;
+      return {
+        kind: "text",
+        tone: "gold",
+        label: "Plan revised",
+        text: `${added} added · ${cancelled} cancelled · ${changed} changed`,
+      };
+    }
+    return { kind: "text", tone: "gold", label: "Plan drafted" };
+  }
+
+  if (typeof p.subtask === "string") {
+    // A subtask state change: { subtask: planId, state: "..." }.
+    const state = str(p, "state") ?? "updated";
+    return {
+      kind: "text",
+      tone: "default",
+      label: `Subtask ${p.subtask} ${state}`,
+    };
+  }
+
+  if (p.budget === true) {
+    return { kind: "text", tone: "crimson", label: "Token budget exceeded", text: str(p, "reason") };
+  }
+
+  if (p.steer === true) {
+    return { kind: "text", tone: "muted", label: "Steering reply (no plan change)" };
+  }
+
+  return { kind: "text", tone: "default", label: "Message", text: str(p, "text") };
 }

@@ -10,6 +10,7 @@ import {
   HouseNotFoundError,
   InvalidStatusTransitionError,
   HouseNotArchivedError,
+  HighLordTransitionError,
 } from "@/server/services/house-service";
 import { ProjectNotFoundError, ProjectDirectoryExistsError, ProjectHasTasksError } from "@/server/repositories/project-repo";
 import { ProviderConfigNotFoundError } from "@/server/repositories/provider-config-repo";
@@ -62,7 +63,7 @@ export function routeError(err: unknown): NextResponse {
   if (err instanceof HouseNotArchivedError) {
     return conflict(err.message);
   }
-  if (err instanceof InvalidStatusTransitionError || err instanceof InvalidTaskStatusTransitionError) {
+  if (err instanceof InvalidStatusTransitionError || err instanceof InvalidTaskStatusTransitionError || err instanceof HighLordTransitionError) {
     return badTransition(err.message);
   }
   // SQLite constraint failures (FK references to nonexistent rows, CHECK

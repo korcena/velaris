@@ -10,14 +10,17 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 import { eq } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import { rawDb } from "@/lib/db";
 import { houses, agents, agentConfigurations } from "@/lib/db/schema";
 import { parseJson } from "@/shared/schemas/common";
+import { HIGH_LORD_SEED } from "@/shared/constants";
 import type {
   HouseDto,
   HouseStatus,
+  HouseKind,
   Permissions,
   HouseAgent,
   HouseConfiguration,
@@ -125,6 +128,7 @@ export function houseRowToDto(db: VelarisDb, houseId: string): HouseDto | null {
     id: h.id,
     name: h.name,
     description: h.description ?? "",
+    kind: h.kind as HouseKind,
     status: h.status as HouseStatus,
     agent: agentDto,
     configuration,
@@ -135,7 +139,10 @@ export function houseRowToDto(db: VelarisDb, houseId: string): HouseDto | null {
 
 /* ------------------------------ Reading ------------------------------ */
 
-export function listHouses(db: VelarisDb, opts: { includeArchived?: boolean } = {}): HouseDto[] {
+export function listHouses(
+  db: VelarisDb,
+  opts: { includeArchived?: boolean; includeHighLord?: boolean } = {},
+): HouseDto[] {
   const rows = db
     .select()
     .from(houses)
@@ -143,9 +150,15 @@ export function listHouses(db: VelarisDb, opts: { includeArchived?: boolean } = 
     // Sort newest-first for a stable grid; archive filter applied in memory for MVP.
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
-  const filtered = opts.includeArchived
+  const archivedFiltered = opts.includeArchived
     ? rows
     : rows.filter((r) => (r.status as HouseStatus) !== "archived");
+
+  // The seeded High Lord is excluded from the plain list to protect the Houses
+  // grid empty-state assertions; includeHighLord opts in (used by the map).
+  const filtered = opts.includeHighLord
+    ? archivedFiltered
+    : archivedFiltered.filter((r) => (r.kind as HouseKind) !== "high_lord");
 
   return filtered.map((r) => houseRowToDto(db, r.id)!);
 }
@@ -154,12 +167,19 @@ export function getHouse(db: VelarisDb, id: string): HouseDto | null {
   return houseRowToDto(db, id);
 }
 
+/** The single High Lord house (kind='high_lord'), or null. Used by the Court. */
+export function findHighLordHouse(db: VelarisDb): HouseDto | null {
+  const row = db.select().from(houses).where(eq(houses.kind, "high_lord")).limit(1).get();
+  return row ? houseRowToDto(db, row.id) : null;
+}
+
 /* ------------------------------ Writing ------------------------------ */
 
 export interface CreateHouseInput {
   id?: string;
   name: string;
   description?: string | null;
+  kind?: HouseKind;
   agent: HouseAgent;
   configuration: HouseConfiguration;
   status?: HouseStatus;
@@ -181,6 +201,7 @@ export function createHouse(db: VelarisDb, input: CreateHouseInput): HouseDto {
         id: houseId,
         name: input.name,
         description: input.description ?? "",
+        kind: input.kind ?? "agent",
         status,
       })
       .run();
@@ -327,5 +348,86 @@ export function houseHasTasks(db: VelarisDb, id: string): boolean {
     .prepare(`SELECT EXISTS(SELECT 1 FROM tasks WHERE house_id = ?) AS e`)
     .get(id) as { e: 0 | 1 };
   return row.e === 1;
+}
+
+/* ------------------------- High Lord seeding ------------------------ */
+
+/**
+ * Idempotent seed of the High Lord house (kind='high_lord'): a singleton house
+ * row with its agent + configuration, created only when no High Lord exists.
+ * Never clobbers user edits (model/provider/systemPrompt are user-editable via
+ * the standard house form). Reuses the createHouse repo fn inside a transaction.
+ *
+ * Accepts either the Drizzle wrapper or the raw better-sqlite3 connection so it
+ * can run from both the web process bootstrap and the (raw) engine process —
+ * mirroring seedDefaultProviderConfigs.
+ */
+export function seedHighLordHouse(
+  db: VelarisDb | Database.Database,
+): HouseDto | null {
+  const raw: Database.Database =
+    "$client" in db ? rawDb(db as VelarisDb) : (db as Database.Database);
+
+  const existing = raw
+    .prepare(`SELECT id FROM houses WHERE kind = 'high_lord' LIMIT 1`)
+    .get() as { id: string } | undefined;
+  if (existing) {
+    // Already seeded — return the existing DTO (via the wrapper if available).
+    return "$client" in db ? houseRowToDto(db as VelarisDb, existing.id) : null;
+  }
+
+  const houseId = randomUUID();
+  const agentId = randomUUID();
+  const configId = randomUUID();
+  const config = HIGH_LORD_SEED.CONFIGURATION;
+
+  // Insert the house + agent + configuration in one transaction (idempotent by
+  // the kind='high_lord' existence check above — never clobbers user edits).
+  raw
+    .prepare(
+      `INSERT INTO houses (id, name, description, kind, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'high_lord', 'active', ?, ?)`,
+    )
+    .run(
+      houseId,
+      HIGH_LORD_SEED.HOUSE_NAME,
+      HIGH_LORD_SEED.HOUSE_DESCRIPTION,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+  raw
+    .prepare(
+      `INSERT INTO agents (id, house_id, name, role, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      agentId,
+      houseId,
+      HIGH_LORD_SEED.AGENT_NAME,
+      HIGH_LORD_SEED.AGENT_ROLE,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+  raw
+    .prepare(
+      `INSERT INTO agent_configurations
+         (id, agent_id, system_prompt, execution_provider, ai_provider, model_id,
+          workspace_allowlist, tools, permissions, approval_policy, concurrency, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '{}', ?, ?, ?, ?)`,
+    )
+    .run(
+      configId,
+      agentId,
+      HIGH_LORD_SEED.SYSTEM_PROMPT,
+      config.executionProvider,
+      config.aiProvider,
+      config.modelId,
+      config.approvalPolicy,
+      config.concurrency,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+
+  return "$client" in db ? houseRowToDto(db as VelarisDb, houseId) : null;
 }
 

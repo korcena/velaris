@@ -22,6 +22,7 @@
 import { migrate } from "@/lib/db/migrate";
 import { closeDb, getRawDb, getDb } from "@/lib/db";
 import { seedDefaultProviderConfigs } from "@/server/repositories/provider-config-repo";
+import { seedHighLordHouse } from "@/server/repositories/house-repo";
 import { OpencodeClient } from "@/server/opencode";
 import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
 import { OpenCodeServerManager } from "./opencode-server";
@@ -67,6 +68,8 @@ async function main(): Promise<void> {
   const raw = getRawDb();
   // 2. Seed the two default provider configs if absent (idempotent).
   const seeded = seedDefaultProviderConfigs(raw);
+  // Seed the singleton High Lord house (idempotent; never clobbers user edits).
+  seedHighLordHouse(raw);
   const db = getDb();
 
   // 3. Heartbeat row so /api/health can report engine liveness.

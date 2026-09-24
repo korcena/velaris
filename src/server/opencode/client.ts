@@ -1,16 +1,16 @@
 /**
- * OpenCode client — thin typed HTTP + SSE client for the verified OpenCode
- * server endpoints (v1.18.31). Builds against the exact calls I tested, per
- * IMPLEMENTATION_PLAN §2 / ARCHITECTURE §7. No invented endpoints.
+ * OpenCode client — thin typed HTTP + SSE client for the installed OpenCode
+ * server (v1.18.32). Builds against the live-verified endpoint shapes.
  *
  * Verified endpoint set this client uses:
  *   GET  /api/health                                  health()
  *   GET  /api/model                                   listModels()
  *   POST /session {directory?}                        createSession()
- *   POST /session/{id}/init                           initSession()
- *   POST /session/{id}/prompt {providerID, modelID, prompt, messageID?} prompt()
+ *   POST /session/{id}/message                         prompt()  → reply after turn
+ *   POST /session/{id}/prompt_async                    promptAsync() → 204, SSE flow
  *   POST /session/{id}/abort                           abortSession()
  *   GET  /session/{id}                                 getSession()
+ *   GET  /session/{id}/message                         listMessages() (SINGULAR transcript)
  *   GET  /session/{id}/diff                            getSessionDiff()
  *   GET  /session                                      listSessions()
  *   GET  /permission                                   listPendingPermissions()
@@ -23,13 +23,15 @@
  * Explicit limitations (never simulated):
  *  - NO pause/resume endpoints exist. abortSession is the only interruption.
  *  - The SSE /event stream is directory-scoped; one consumer per working dir.
- *  - The /api/* "v2" variants (prompt_async, SessionV2Info, PromptInput) mirror
- *    the same concepts but use different request shapes; this client targets
- *    the documented + verified non-v2 set above which the plan pins.
+ *  - Missing routes on 1.18.32 return HTTP 200 + SPA HTML (not 404), so a
+ *    non-JSON success body from a JSON endpoint is a hard error (see request()).
  */
 
 import type {
   SessionInfo,
+  SessionPart,
+  SessionMessageRaw,
+  SessionMessage,
   PermissionRequest,
   QuestionRequest,
   SessionDiffEntry,
@@ -65,7 +67,16 @@ export interface PromptOptions {
   providerID: string;
   modelID: string;
   prompt: string;
+  /** Optional continuation message id (^msg). */
   messageID?: string;
+  /** Agent persona id (1.18.32 `agent` field). */
+  agent?: string;
+  /** System prompt (1.18.32 `system` field). Optional; the adapter composes it
+   * into the prompt text already. */
+  system?: string;
+  /** Whether to fire-and-forget (prompt_async). Default false → use /message.
+   * The engine prefers prompt_async for streaming. */
+  noReply?: boolean;
 }
 
 export class OpencodeClient {
@@ -96,19 +107,40 @@ export class OpencodeClient {
     }
     if (!res.ok) {
       let detail = "";
-      try {
-        const text = await res.text();
-        detail = text.slice(0, 300);
-      } catch {
-        /* ignore body read error */
+      const ct = res.headers.get("content-type") ?? "";
+      if (!ct.includes("text/html")) {
+        try {
+          const text = await res.text();
+          detail = text.slice(0, 300);
+        } catch {
+          /* ignore body read error */
+        }
+      } else {
+        detail = "(SPA HTML — route missing on the OpenCode server?)";
       }
       throw new OpencodeError(`OpenCode ${method} ${path} failed (${res.status}): ${detail}`, res.status);
     }
+    // 204 / empty — no body to parse (prompt_async).
     if (res.status === 204) return undefined as T;
+
+    const ct = res.headers.get("content-type") ?? "";
+    // Guard: a missing route on 1.18.32 returns HTTP 200 + SPA HTML, which would
+    // otherwise look like a silent success after a failed JSON.parse. Detect it.
+    if (ct.includes("text/html")) {
+      throw new OpencodeError(
+        `OpenCode ${method} ${path} returned HTTP ${res.status} with non-JSON content-type "${ct}" — likely a missing route / SPA fallback`,
+        res.status,
+      );
+    }
     try {
       return (await res.json()) as T;
     } catch {
-      return undefined as T;
+      // Non-JSON success body from a JSON endpoint is treated as the SPA-fallback
+      // class of failure too — throw rather than silently returning undefined.
+      throw new OpencodeError(
+        `OpenCode ${method} ${path} returned HTTP ${res.status} with a non-JSON body (content-type "${ct}") — likely a missing route / SPA fallback`,
+        res.status,
+      );
     }
   }
 
@@ -173,15 +205,27 @@ export class OpencodeClient {
   /* ---------------- sessions ---------------- */
 
   async createSession(directory?: string): Promise<{ id: string }> {
+    // 1.18.32 IGNORES a `{directory}` in the request BODY and always roots the
+    // session at the server's launch directory. It honours `directory` only as a
+    // QUERY param. So we append it to the path and keep the body `{}`.
+    const query = directory !== undefined && directory.length > 0
+      ? `?directory=${encodeURIComponent(directory)}`
+      : "";
     const body = await this.request<{ id: string }>(
       "POST",
-      "/session",
-      directory !== undefined ? { directory } : {},
+      `/session${query}`,
+      {},
     );
     if (!body?.id) throw new OpencodeError("OpenCode createSession returned no id");
     return body;
   }
 
+  /**
+   * (Kept for completeness/back-compat, NOT used by the adapter start path.) In
+   * 1.18.32 `init` is optional for prompting and requires a provider-backed
+   * messageID (`^msg`); we never invent one. The adapter just creates a session
+   * and prompts it directly.
+   */
   async initSession(id: string, opts?: { modelID?: string; providerID?: string }): Promise<void> {
     const body: Record<string, unknown> = {};
     if (opts?.modelID) body.modelID = opts.modelID;
@@ -189,15 +233,46 @@ export class OpencodeClient {
     await this.request<unknown>("POST", `/session/${encodeURIComponent(id)}/init`, body);
   }
 
-  async prompt(id: string, opts: PromptOptions): Promise<{ id?: string } | null> {
-    const body: Record<string, unknown> = { providerID: opts.providerID, modelID: opts.modelID, prompt: opts.prompt };
+  /** Compose the 1.18.32 prompt body. Shared by prompt() and promptAsync(). */
+  private promptBody(opts: PromptOptions): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: { providerID: opts.providerID, modelID: opts.modelID },
+      parts: [{ type: "text", text: opts.prompt }],
+    };
     if (opts.messageID) body.messageID = opts.messageID;
-    const result = await this.request<Record<string, unknown> | { data?: Record<string, unknown> }>(
+    if (opts.agent) body.agent = opts.agent;
+    if (opts.system) body.system = opts.system;
+    if (opts.noReply) body.noReply = true;
+    return body;
+  }
+
+  /**
+   * Synchronous prompt — POST /session/{id}/message. Returns after the whole
+   * turn completes (no streaming). Assistant text lives in `parts[].text` where
+   * `part.type === 'text'`; `info` carries cost/tokens/time. Returns the parsed
+   * response or null.
+   */
+  async prompt(id: string, opts: PromptOptions): Promise<Record<string, unknown> | null> {
+    const result = await this.request<Record<string, unknown>>(
       "POST",
-      `/session/${encodeURIComponent(id)}/prompt`,
-      body,
+      `/session/${encodeURIComponent(id)}/message`,
+      this.promptBody(opts),
     );
-    return null;
+    return result ?? null;
+  }
+
+  /**
+   * Fire-and-forget prompt — POST /session/{id}/prompt_async. Returns 204
+   * immediately; the model then runs and events flow over the /event SSE. This
+   * is the right call for the engine's streaming model (the runner's quiet
+   * watchdog + SSE ingest design).
+   */
+  async promptAsync(id: string, opts: PromptOptions): Promise<void> {
+    await this.request<unknown>(
+      "POST",
+      `/session/${encodeURIComponent(id)}/prompt_async`,
+      this.promptBody(opts),
+    );
   }
 
   async abortSession(id: string): Promise<void> {
@@ -207,6 +282,40 @@ export class OpencodeClient {
   async getSession(id: string): Promise<SessionInfo> {
     const body = await this.request<Record<string, unknown>>("GET", `/session/${encodeURIComponent(id)}`);
     return normalizeSessionInfo(body);
+  }
+
+  /**
+   * Fetch the session transcript — OpenCode 1.18.32 uses the SINGULAR route
+   * `GET /session/{id}/message` (the plural `/messages` returns SPA HTML). Returns
+   * `Array<{ info, parts }>`; we normalize to SessionMessage[] by concatenating
+   * each message's assistant text `parts[].text` where `part.type === 'text'`,
+   * dropping user messages. Tolerantly typed — unknown part types are skipped.
+   */
+  async listMessages(providerSessionId: string): Promise<SessionMessage[]> {
+    const raw = await this.request<SessionMessageRaw[] | Record<string, unknown>>(
+      "GET",
+      `/session/${encodeURIComponent(providerSessionId)}/message`,
+    );
+    let arr: SessionMessageRaw[] = [];
+    if (Array.isArray(raw)) arr = raw as SessionMessageRaw[];
+    else if (raw && Array.isArray((raw as Record<string, unknown>).message)) {
+      arr = (raw as { message: SessionMessageRaw[] }).message;
+    }
+    const out: SessionMessage[] = [];
+    for (const m of arr) {
+      const info = (m?.info ?? {}) as Record<string, unknown>;
+      const role = typeof info.role === "string" ? info.role.toLowerCase() : "";
+      const isAssistant = ["assistant", "model", "agent", "assistant-message"].includes(role);
+      if (!isAssistant) continue;
+      const text = extractPartsText(m?.parts ?? []);
+      if (!text) continue;
+      out.push({
+        id: typeof info.id === "string" ? info.id : undefined,
+        role: "assistant",
+        text,
+      });
+    }
+    return out;
   }
 
   async listSessions(): Promise<SessionInfo[]> {
@@ -244,14 +353,11 @@ export class OpencodeClient {
     return Array.isArray(body) ? body : [];
   }
 
-  async replyQuestion(
-    requestID: string,
-    req: { answers: Array<{ questionID?: string; selected: string[] }> },
-  ): Promise<void> {
+  async replyQuestion(requestID: string, answers: string[][]): Promise<void> {
     await this.request<unknown>(
       "POST",
       `/question/${encodeURIComponent(requestID)}/reply`,
-      req,
+      { answers },
     );
   }
 
@@ -454,5 +560,23 @@ function normalizeSessionInfo(input: Record<string, unknown>): SessionInfo {
       updated: typeof time.updated === "number" ? time.updated : 0,
     },
     title: typeof input.title === "string" ? input.title : "",
+    directory: typeof input.directory === "string" ? input.directory : null,
   };
+}
+
+/**
+ * Concatenate the assistant-facing text from a transcript message's parts.
+ * Only `parts[].text` where `part.type === 'text'` is surfaced; all other part
+ * types (reasoning, tool, snapshot, patch, step-start/finish, compaction, ...)
+ * are skipped so chain-of-thought and structural frames never become content.
+ */
+function extractPartsText(parts: SessionPart[]): string {
+  return (Array.isArray(parts) ? parts : [])
+    .map((p) => {
+      if (p && p.type === "text" && typeof p.text === "string") return p.text;
+      return "";
+    })
+    .filter((t): t is string => t.length > 0)
+    .join("\n")
+    .trim();
 }

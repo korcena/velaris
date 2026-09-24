@@ -75,20 +75,25 @@ describe("health", () => {
 });
 
 describe("session endpoints + prompt continuation", () => {
-  it("createSession posts to /session with the directory body", async () => {
-    const calls: string[] = [];
+  it("createSession passes directory as a QUERY param (1.18.32 ignores body directory), body {} ", async () => {
+    let url = "";
+    let body: unknown;
     const client = new OpencodeClient({
       baseUrl: "http://oc:4096",
       fetchImpl: fetchStub({
-        "POST http://oc:4096/session": (req) => {
-          calls.push(req.url);
-          return jsonResponse({ id: "sess-1" });
+        "POST http://oc:4096/session*": (req) => {
+          url = req.url;
+          return req.json().then((b) => {
+            body = b;
+            return jsonResponse({ id: "sess-1" });
+          });
         },
       }),
     });
     const res = await client.createSession("/work");
     expect(res.id).toBe("sess-1");
-    expect(calls[0]).toContain("/session");
+    expect(url).toContain("/session?directory=%2Fwork");
+    expect(body).toEqual({});
   });
 
   it("initSession posts to /session/{id}/init with model + provider", async () => {
@@ -108,26 +113,135 @@ describe("session endpoints + prompt continuation", () => {
     expect(body).toEqual({ modelID: "glm-5.3", providerID: "ollama-cloud" });
   });
 
-  it("prompt includes providerID/modelID/prompt and messageID continuation when present", async () => {
+  it("prompt posts to /session/{id}/message with the 1.18.32 {model, parts} body", async () => {
     let body: unknown;
     const client = new OpencodeClient({
       baseUrl: "http://oc:4096",
       fetchImpl: fetchStub({
-        "POST http://oc:4096/session/s1/prompt": (req) => {
+        "POST http://oc:4096/session/s1/message": (req) => {
           return req.json().then((b) => {
             body = b;
-            return jsonResponse({});
+            return jsonResponse({ info: { id: "m1", role: "assistant" }, parts: [{ type: "text", text: "ok" }] });
           });
         },
       }),
     });
-    await client.prompt("s1", { providerID: "p", modelID: "m", prompt: "hi", messageID: "msg-1" });
-    expect(body).toEqual({ providerID: "p", modelID: "m", prompt: "hi", messageID: "msg-1" });
+    const res = await client.prompt("s1", { providerID: "ollama-cloud", modelID: "glm-5.3", prompt: "hi" });
+    expect(body).toEqual({
+      model: { providerID: "ollama-cloud", modelID: "glm-5.3" },
+      parts: [{ type: "text", text: "hi" }],
+    });
+    expect(res).not.toBeNull();
+  });
 
-    // Without messageID it is omitted.
-    body = undefined;
-    await client.prompt("s1", { providerID: "p", modelID: "m", prompt: "hi" });
-    expect(body).toEqual({ providerID: "p", modelID: "m", prompt: "hi" });
+  it("prompt passes messageID/agent/system/noReply through when present", async () => {
+    let body: unknown;
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "POST http://oc:4096/session/s1/message": (req) =>
+          req.json().then((b) => {
+            body = b;
+            return jsonResponse({ info: {}, parts: [] });
+          }),
+      }),
+    });
+    await client.prompt("s1", { providerID: "p", modelID: "m", prompt: "hi", messageID: "msg-1", agent: "coder", system: "sys", noReply: true });
+    expect(body).toEqual({
+      model: { providerID: "p", modelID: "m" },
+      parts: [{ type: "text", text: "hi" }],
+      messageID: "msg-1",
+      agent: "coder",
+      system: "sys",
+      noReply: true,
+    });
+  });
+
+  it("promptAsync posts to /session/{id}/prompt_async (fire-and-forget) with the same body", async () => {
+    let body: unknown;
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "POST http://oc:4096/session/s1/prompt_async": (req) =>
+          req.json().then((b) => {
+            body = b;
+            return new Response(null, { status: 204 });
+          }),
+      }),
+    });
+    await client.promptAsync("s1", { providerID: "ollama-cloud", modelID: "glm-5.3", prompt: "go" });
+    expect(body).toEqual({
+      model: { providerID: "ollama-cloud", modelID: "glm-5.3" },
+      parts: [{ type: "text", text: "go" }],
+    });
+  });
+
+  it("replyQuestion sends answers as string[][] (1.18.32)", async () => {
+    let body: unknown;
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "POST http://oc:4096/question/q1/reply": (req) =>
+          req.json().then((b) => {
+            body = b;
+            return jsonResponse({});
+          }),
+      }),
+    });
+    await client.replyQuestion("q1", [["TypeScript"]]);
+    expect(body).toEqual({ answers: [["TypeScript"]] });
+  });
+
+  it("listMessages GETs the SINGULAR /session/{id}/message and concatenates text parts", async () => {
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "GET http://oc:4096/session/s1/message": () =>
+          jsonResponse([
+            { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "do the thing" }] },
+            { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "{\"subtasks\":[]}" }] },
+            { info: { id: "m3", role: "assistant" }, parts: [{ type: "text", text: "second reply" }, { type: "reasoning", text: "cot" }, { type: "text", text: "!" }] },
+            { info: { id: "m4", role: "assistant" }, parts: [{ type: "tool", text: "" }] },
+          ]),
+      }),
+    });
+    const msgs = await client.listMessages("s1");
+    // User dropped; reasoning/tool parts skipped; text parts concatenated.
+    expect(msgs).toEqual([
+      { id: "m2", role: "assistant", text: "{\"subtasks\":[]}" },
+      { id: "m3", role: "assistant", text: "second reply\n!" },
+    ]);
+  });
+
+  it("listMessages unwraps a { message: [...] } envelope and returns [] on unknowns", async () => {
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "GET http://oc:4096/session/s1/message": () =>
+          jsonResponse({ message: [{ info: { id: "a", role: "assistant" }, parts: [{ type: "text", text: "hi" }] }] }),
+      }),
+    });
+    expect((await client.listMessages("s1")).length).toBe(1);
+
+    const empty = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "GET http://oc:4096/session/s2/message": () => jsonResponse([]),
+      }),
+    });
+    expect(await empty.listMessages("s2")).toEqual([]);
+  });
+
+  it("REGRESSION: a 200 text/html body from a JSON endpoint THROWS (SPA fallback guard)", async () => {
+    const client = new OpencodeClient({
+      baseUrl: "http://oc:4096",
+      fetchImpl: fetchStub({
+        "GET http://oc:4096/api/model": () =>
+          new Response("<!doctype html><html>SPA</html>", { status: 200, headers: { "content-type": "text/html" } }),
+      }),
+    });
+    // Previously this silently returned undefined → listModels returned []. Now it throws.
+    await expect(client.listModels()).rejects.toBeInstanceOf(OpencodeError);
   });
 });
 
@@ -184,7 +298,7 @@ describe("listModels / listProviders", () => {
     const client = new OpencodeClient({
       baseUrl: "http://oc:4096",
       fetchImpl: fetchStub({
-        "POST http://oc:4096/session/s1/prompt": () => new Response("bad", { status: 500 }),
+        "POST http://oc:4096/session/s1/message": () => new Response("bad", { status: 500 }),
       }),
     });
     await expect(

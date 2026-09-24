@@ -18,6 +18,8 @@ import type { HouseCardData } from "@/components/houses/house-card";
 const SMOKE_PUFFS = [0, 1, 2];
 const FIREWORK_PARTICLES = Array.from({ length: 12 }, (_, i) => i);
 const FAILURE_FLICKERS = Array.from({ length: 6 }, (_, i) => i);
+const BURN_FLAMES = [0, 1, 2];
+const BURN_SMOKE = [0, 1, 2];
 
 /** CSS variables derived from the palette (faked single light source). */
 function paletteVars(palette: CastlePalette): CSSProperties {
@@ -52,10 +54,12 @@ export function Castle({
   onNavigate: (houseId: string) => void;
 }) {
   const state = statusToVisualState(house);
+  // High Lord castle is slightly larger (D3.2).
+  const baseScale = plot.sizeVariance * (house.kind === "high_lord" ? 1.08 : 1);
   const baseStyle: CSSProperties = {
     left: plot.x,
     top: plot.y,
-    transform: `translate(-50%, -50%) scale(${plot.sizeVariance})`,
+    transform: `translate(-50%, -50%) scale(${baseScale})`,
     ...paletteVars(palette),
   };
 
@@ -75,6 +79,8 @@ export function Castle({
       className="castle outline-none focus-visible:ring-2 focus-visible:ring-velaris-gold focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
       style={baseStyle}
       data-state={state}
+      data-kind={house.kind ?? "agent"}
+      data-plan-state={house.kind === "high_lord" ? house.planState ?? undefined : undefined}
       data-testid={`map-castle-${house.id}`}
       role="button"
       tabIndex={0}
@@ -147,6 +153,11 @@ export function Castle({
           ? <StaticCelebration kind={celebration} />
           : <BurstCelebration kind={celebration} houseId={house.id} />
         : null}
+
+      {/* Burning overlay when the High Lord's latest plan aborted (D4e(b)) */}
+      {house.kind === "high_lord" && house.planState === "aborted" ? (
+        <CastleBurning reducedMotion={reducedMotion} houseId={house.id} />
+      ) : null}
 
       {/* House name label beneath the castle */}
       <div className="castle-label">{house.name}</div>
@@ -227,3 +238,37 @@ function BurstCelebration({ kind, houseId }: { kind: CelebrationKind; houseId: s
     </div>
   );
 }
+
+/** Burning-castle overlay when the High Lord's latest plan aborted (D4e(b)).
+ *  transform/opacity only; reduced-motion renders a static dimmed tint. */
+function CastleBurning({ reducedMotion, houseId }: { reducedMotion: boolean; houseId: string }) {
+  const seed = hashHouseId(`${houseId}-abort`);
+  if (reducedMotion) {
+    return (
+      <div
+        data-testid="map-castle-burning-static"
+        className="castle-burning castle-burning-static"
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <div data-testid="map-castle-burning" className="castle-burning" aria-hidden="true">
+      {BURN_SMOKE.map((i) => (
+        <span
+          key={`bs${i}`}
+          className="castle-burning-smoke"
+          style={{ "--burn-smoke": ((seed + i) % 3) as number } as CSSProperties}
+        />
+      ))}
+      {BURN_FLAMES.map((i) => (
+        <span
+          key={`bf${i}`}
+          className="castle-burning-flame"
+          style={{ "--burn-flame": ((seed + i) % 3) as number } as CSSProperties}
+        />
+      ))}
+    </div>
+  );
+}
+

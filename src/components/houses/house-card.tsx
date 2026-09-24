@@ -13,12 +13,14 @@ import { RuntimeStatusBadge } from "@/components/houses/runtime-status-badge";
 import { ApprovalList } from "@/components/approvals/approvals-list";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import type { HouseDto, HouseRuntimeStatus, HouseDetailDto } from "@/shared/types";
+import type { HouseDto, HouseRuntimeStatus, HouseDetailDto, HighLordPlanState } from "@/shared/types";
 
 /** The house list enriches each entry with runtime fields (GET /api/houses). */
 export interface HouseCardData extends HouseDto {
   runtimeStatus: HouseRuntimeStatus;
   pendingApprovals: number;
+  /** Derived High Lord plan state (present on high_lord houses only, D4f). */
+  planState?: HighLordPlanState;
 }
 
 export function HouseCard({
