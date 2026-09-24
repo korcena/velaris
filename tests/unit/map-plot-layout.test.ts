@@ -14,13 +14,14 @@ import {
   type CastlePlot,
 } from "@/components/map/plot-layout";
 
-function house(id: string, createdAt: string) {
-  return { id, createdAt };
+function house(id: string, createdAt: string, kind?: string) {
+  return { id, createdAt, ...(kind ? { kind } : {}) };
 }
 
 const T0 = "2024-01-01T00:00:00.000Z";
 const T1 = "2024-02-01T00:00:00.000Z";
 const T2 = "2024-03-01T00:00:00.000Z";
+const T3 = "2024-04-01T00:00:00.000Z";
 
 describe("hashHouseId", () => {
   it("is stable across calls", () => {
@@ -73,6 +74,70 @@ describe("computePlotLayout", () => {
     const [first] = computePlotLayout([house("a", T0)]);
     expect(first.x).toBe(WORLD.width / 2);
     expect(first.y).toBe(WORLD.height / 2);
+  });
+
+  it("pins the High Lord to the world centre even when not the oldest house", () => {
+    // agent created T0, high_lord created T1, agent created T2.
+    const input = [
+      house("agent-a", T0, "agent"),
+      house("high-lord", T1, "high_lord"),
+      house("agent-b", T2, "agent"),
+    ];
+    const plots = computePlotLayout(input);
+    const hl = plots.find((p) => p.houseId === "high-lord")!;
+    expect(hl.slot).toBe(0);
+    expect(hl.x).toBe(WORLD.width / 2);
+    expect(hl.y).toBe(WORLD.height / 2);
+    expect(plots[0].houseId).toBe("high-lord");
+    // The two agent houses then take ring 1 slots in founded order (agent-a first).
+    const agentPlots = plots.filter((p) => p.houseId !== "high-lord");
+    expect(agentPlots.map((p) => p.houseId)).toEqual(["agent-a", "agent-b"]);
+    expect(agentPlots.map((p) => p.slot)).toEqual([1, 2]);
+  });
+
+  it("pins the High Lord to the centre regardless of its founded position", () => {
+    const input = [
+      house("hl", T2, "high_lord"),
+      house("agent-a", T0),
+      house("agent-b", T1),
+    ];
+    const plots = computePlotLayout(input);
+    expect(plots[0].houseId).toBe("hl");
+    expect(plots[0].slot).toBe(0);
+    expect(plots[0].x).toBe(WORLD.width / 2);
+    expect(plots[0].y).toBe(WORLD.height / 2);
+    expect(plots.map((p) => p.houseId)).toEqual(["hl", "agent-a", "agent-b"]);
+  });
+
+  it("appending an agent house keeps slots stable with the High Lord pinned at 0", () => {
+    const before = computePlotLayout([
+      house("agent-a", T0),
+      house("hl", T1, "high_lord"),
+      house("agent-b", T2),
+    ]);
+    const after = computePlotLayout([
+      house("agent-a", T0),
+      house("hl", T1, "high_lord"),
+      house("agent-b", T2),
+      house("agent-c", T3),
+    ]);
+    const beforeMap = new Map(before.map((p) => [p.houseId, p]));
+    for (const p of after) {
+      if (p.houseId === "agent-c") continue;
+      expect(p).toEqual(beforeMap.get(p.houseId)!);
+    }
+    // HL stays at 0; the appended agent lands on the next free ring slot.
+    expect(after[0].houseId).toBe("hl");
+    expect(after.map((p) => p.slot)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("with no High Lord the layout is unchanged (same as founded-order layout)", () => {
+    const input = [house("c", T2), house("a", T0), house("b", T1)];
+    const plots = computePlotLayout(input);
+    expect(plots.map((p) => p.houseId)).toEqual(["a", "b", "c"]);
+    expect(plots.map((p) => p.slot)).toEqual([0, 1, 2]);
+    expect(plots[0].x).toBe(WORLD.width / 2);
+    expect(plots[0].y).toBe(WORLD.height / 2);
   });
 
   it("grows outward: ring 1 orbits the centre, ring 2 orbits ring 1", () => {

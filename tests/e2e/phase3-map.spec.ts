@@ -83,13 +83,14 @@ test.describe("Castle map", () => {
 
     // The seeded High Lord castle is always present at the city heart (D3):
     // gold (data-kind="high_lord") and on the map even with zero user houses.
+    // It is pinned to slot 0 / world centre regardless of founded order.
     const hiHouse = (await (
       await request.get("/api/houses?includeHighLord=true")
     ).json()).houses.find((h: { kind: string }) => h.kind === "high_lord") as { id: string };
     const hlCastle = page.getByTestId(`map-castle-${hiHouse.id}`);
     await expect(hlCastle).toBeVisible();
     await expect(hlCastle).toHaveAttribute("data-kind", "high_lord");
-    // HL owns slot 0 (oldest house → city centre).
+    // HL is idle at rest.
     await expect(hlCastle).toHaveAttribute("data-state", /idle/);
 
     // Click navigates to the house detail.

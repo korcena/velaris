@@ -7,6 +7,11 @@
  * grows outward as houses are founded. Each house keeps a stable slot, plus a
  * deterministic size/window variance derived from its id (djb2 hash).
  *
+ * The High Lord (kind === 'high_lord', when present) is always pinned to the
+ * world centre (slot 0), regardless of founded order; the remaining houses are
+ * then laid out on the rings in founding order. Appending an agent house never
+ * moves existing agent houses, and the High Lord stays at the heart.
+ *
  * Coordinates are absolute pixels within the WORLD canvas; rings stay inside
  * the world bounds for any house count.
  */
@@ -58,23 +63,28 @@ const RING_INSET = 90;
 /**
  * Compute castle plot layout for a set of houses — an outward spiral.
  *
- * - Sorted by createdAt ASC (founding order) so a newly-founded house appends
- *   to the frontier and existing castles keep their slots.
- * - slot 0 sits at the city heart (world centre); slots 1..5 form ring 1;
- *   ring n ≥ 2 holds n + 4 houses — the city grows outward as houses are
- *   founded. Per-ring golden-angle staggering keeps rings misaligned.
+ * - Ordering: the High Lord (if present) always comes first at slot 0 (world
+ *   centre); the remaining houses are then sorted by createdAt ASC (founding
+ *   order) with a stable id tie-break, so a newly-founded house appends to the
+ *   frontier and existing castles keep their slots.
+ * - ring 1 holds 5 houses around the centre; ring n ≥ 2 holds n + 4 houses —
+ *   the city grows outward as houses are founded. Per-ring golden-angle
+ *   staggering keeps rings misaligned.
  * - All coordinates stay inside WORLD for any house count (outer rings clamp
  *   to the bounds via the ellipse geometry).
  */
 export function computePlotLayout(
-  houses: { id: string; createdAt: string }[],
+  houses: { id: string; createdAt: string; kind?: string }[],
 ): CastlePlot[] {
-  const sorted = [...houses].sort((a, b) => {
+  const highLord = houses.filter((h) => h.kind === "high_lord");
+  const others = houses.filter((h) => h.kind !== "high_lord");
+  const sorted = [...others].sort((a, b) => {
     // createdAt ASC; stable tie-break on id for determinism.
     if (a.createdAt < b.createdAt) return -1;
     if (a.createdAt > b.createdAt) return 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+  const ordered = highLord.length > 0 ? [...highLord, ...sorted] : sorted;
 
   // Ring geometry per slot: 0 → centre; 1..5 → ring 1; 6..11 → ring 2; …
   const ringOf = (slot: number): { ring: number; indexInRing: number; count: number } => {
@@ -92,7 +102,7 @@ export function computePlotLayout(
   const cx = WORLD.width / 2;
   const cy = WORLD.height / 2;
 
-  return sorted.map((h, i) => {
+  return ordered.map((h, i) => {
     const slot = i;
     const { ring, indexInRing, count } = ringOf(slot);
 
