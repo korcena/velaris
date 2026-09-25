@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Send, Castle, ArrowLeft, Loader2 } from "lucide-react";
+import { Send, Castle, ArrowLeft, Loader2, Pause, Play } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +41,7 @@ export default function HouseDetailPage() {
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [pausing, setPausing] = useState(false);
 
   // Realtime: subscribe to event frames so we can append a task's events live.
   // Since a single stream serves the whole app, we filter frames by taskId.
@@ -160,6 +161,30 @@ export default function HouseDetailPage() {
 
   const houseName = house?.name ?? "House";
 
+  // Phase 5 native pause/resume: only `executionProvider='ollama'` houses can
+  // suspend a running loop in place (decision Q10). The web records intent via
+  // the pause/resume routes; the engine does the actual suspend/resume.
+  const isOllama = house?.configuration.executionProvider === "ollama";
+  const isPaused = house?.activeTask?.status === "paused";
+
+  async function togglePause() {
+    if (!activeTaskId || !isOllama) return;
+    setPausing(true);
+    try {
+      const endpoint = isPaused ? "/resume" : "/pause";
+      const res = await apiFetch<{ task: { status: string } }>(
+        `/api/tasks/${activeTaskId}${endpoint}`,
+        { method: "POST" },
+      );
+      toast.success(isPaused ? "Quest resumed" : "Quest paused");
+      void res;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to pause/resume quest");
+    } finally {
+      setPausing(false);
+    }
+  }
+
   if (notFound) {
     return (
       <div>
@@ -202,6 +227,25 @@ export default function HouseDetailPage() {
           ) : (
             <Badge variant="outline">No active quest</Badge>
           )}
+
+          {isOllama && activeTaskId ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void togglePause()}
+              disabled={pausing}
+              aria-label={isPaused ? "Resume quest" : "Pause quest"}
+            >
+              {pausing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : isPaused ? (
+                <Play className="h-4 w-4" />
+              ) : (
+                <Pause className="h-4 w-4" />
+              )}
+              <span>{isPaused ? "Resume" : "Pause"}</span>
+            </Button>
+          ) : null}
         </div>
       ) : null}
 

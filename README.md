@@ -2,14 +2,14 @@
 
 Velaris is a fantasy-inspired AI agent orchestration platform — a full-stack local-first web
 app where you create AI agents as "houses" in a night-lit city, send them quests, watch them
-work in real time, and respond to messenger birds when they need your approval. Execution is
-real: agents run through [OpenCode](https://opencode.ai) (execution engine) with models
-supplied by Ollama (via OpenCode's authenticated `ollama-cloud` provider, or any Ollama HTTP
-endpoint).
+work in real time, answer messenger birds, and let the High Lord orchestrate multi-step plans.
+Execution is real, with two first-class providers: OpenCode as the execution engine, or a
+direct-Ollama tool loop for `executionProvider='ollama'` houses. Models are supplied by Ollama
+(via OpenCode's authenticated `ollama-cloud` provider, or any Ollama HTTP endpoint).
 
 ## Status
 
-Phases 1–3 are implemented and tested:
+Phases 1–5 are implemented and tested:
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -17,8 +17,8 @@ Phases 1–3 are implemented and tested:
 | 2 — Real Execution & Approvals Core | Velaris Engine (task queue, OpenCode server lifecycle, SSE ingestion), real task execution, session persistence, structured events, cost/token tracking, functional messenger-bird approvals (approve/reject/reply), live agent chat, model picker, `/api/stream` SSE | ✅ Done |
 | 3 — Velaris World & Messenger Roost | Interactive city view with per-house status animations (chimney smoke, messenger birds, once-per-task fireworks), full house workspace panel (Overview / Activity / Agent Chat / Task Results with diff viewer / Approvals), Roost hub with filters + resolved-approval history, read-only artifacts API | ✅ Done |
 | 3.1 — City Map | Full-screen Sims-like bird's-eye map at `/map`: houses as shaded castles, pan & zoom (wheel + buttons), outward-spiral placement, real-time status animations & celebrations | ✅ Done |
-| 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs | ⏳ Planned |
-| 5 — Ollama-Native Agent Runtime | Direct-Ollama adapter, tool loop, native pause/resume, worktree isolation | ⏳ Planned |
+| 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs, mid-plan steering, burning-castle abort | ✅ Done |
+| 5 — Ollama-Native Agent Runtime | Direct-Ollama provider + tool loop, permission-gated fs/shell/git tools, native pause/resume, estimated cost tracking, flag-gated worktree scaffold | ✅ Done |
 | 6 — Advanced Platform | Multi-agent houses, usage dashboards, templates, archives, monitoring | ⏳ Planned |
 
 See the [implementation plan](./docs/IMPLEMENTATION_PLAN.md) for the full phase breakdown
@@ -31,25 +31,34 @@ and MVP acceptance journey.
   concurrency. Enable, disable, or archive them.
 - **Post quests** — register project directories (git info auto-detected), create typed
   tasks, and assign them directly to a house.
-- **Watch real execution** — the engine process claims queued tasks, runs them through a
-  real OpenCode server, and streams every event (messages, tool calls, usage) to the
-  browser live.
+- **Watch real execution** — the engine process claims queued tasks and runs them through the
+  house's provider: a real OpenCode server, or the direct-Ollama tool loop (permission-gated
+  fs/shell/git tools, native pause/resume from the house panel). Every event (messages, tool
+  calls, usage) streams to the browser live.
+- **Command the High Lord** — an auto-seeded **High Lord** orchestrator house. Send it a
+  plain-language instruction on the **Court** page and it plans a multi-step quest,
+  delegating subtasks to other houses as a dependency-aware DAG. The plan board shows live
+  progress, supports mid-plan steering, rolls up cost, and aborts the whole plan (with a
+  burning-castle visual) if a subtask keeps failing.
 - **Answer messenger birds** — when an agent requests a file/command permission or asks a
   clarifying question, a gold bird indicator appears on its house and in the Messenger
   Roost. Approve, reject, or reply; execution resumes immediately.
 - **See the city** — the **Map** page renders every house as a shaded castle on a
-  full-screen night map: the first house sits at the city heart and new houses
-  spread outward in rings. Drag to pan, wheel or buttons to zoom, click a castle
-  to visit its house. Windows pulse while planning, chimneys smoke while
-  working, a wing-flapping messenger bird appears while awaiting your answer,
-  and a fireworks burst celebrates each completed quest.
+  full-screen night map: the **High Lord** castle (gold-plated, and burning when its plan
+  is aborted) is pinned at the city heart, while other houses spread outward in rings.
+  Drag to pan, wheel or buttons to zoom, click a castle to visit its house. Windows pulse
+  while planning, chimneys smoke while working, a wing-flapping messenger bird appears
+  while awaiting your answer, and a fireworks burst celebrates each completed quest.
 - **Inspect results** — each house has a workspace panel with live usage stats, a
   structured activity timeline, agent chat, and per-quest results including rendered diffs
   of the files the agent changed.
 
 ## Setup
 
-Requirements: Node 20+ and [`opencode`](https://opencode.ai) on your `PATH`. SQLite is the
+Requirements: Node 20+, plus [`opencode`](https://opencode.ai) on your `PATH` for houses
+using the OpenCode provider (the High Lord always does). Houses that use the direct-Ollama
+provider instead only need an Ollama endpoint reachable at `OLLAMA_BASE_URL` — with no local
+Ollama server they simply won't run, while the rest of the app keeps working. SQLite is the
 only datastore — no PostgreSQL or Docker needed.
 
 ```bash
@@ -86,10 +95,11 @@ npm run db:studio     # browse the database with drizzle-kit studio
 Two processes, one package, one SQLite file (WAL mode, `busy_timeout=5000`):
 
 - **Web** (`src/app`) — Next.js 15 App Router. Pages + `/api/*` routes. Reads execution
-  state; writes only user-action rows (houses, projects, tasks) plus approval replies.
-  Never runs agent tasks itself.
+  state; writes user-action rows (houses, projects, tasks), approval replies, and the
+  pause/resume intent routes. Never runs agent tasks itself.
 - **Velaris Engine** (`src/engine/main.ts`, plain Node) — task queue, OpenCode server
-  lifecycle (spawns or adopts `opencode serve`, health-gated), SSE ingestion of agent
+  lifecycle (spawns or adopts `opencode serve`, health-gated), the direct-Ollama tool loop,
+  provider selection per house with independent health-gating, and SSE ingestion of agent
   events. Single writer for execution tables (sessions, events, approvals, notifications).
 
 Real-time everywhere via SSE: the browser subscribes to `/api/stream` (event cursor =
@@ -109,8 +119,11 @@ stream with backoff reconnect and boot-time reconciliation of orphaned sessions.
 ## Testing
 
 - **Unit/integration (Vitest)** — schemas, repositories, the execution status machine,
-  OpenCode event mapping, queue/reconcile logic, city-map camera/layout/palette logic,
-  diff parsing. Integration tests invoke API route handlers directly against a temp database.
+  OpenCode event mapping, queue/reconcile logic, the Ollama tool loop, permission gating
+  (path-escape/shell guards), the provider seam, migration data-preservation, pause/resume,
+  city-map camera/layout/palette logic, diff parsing. Integration tests invoke API route
+  handlers directly against a temp database.
 - **E2E (Playwright)** — full UI journeys (house lifecycle, quest board, roost approvals,
-  city map, house panel). E2E boots web-only with a dedicated database and does **not**
-  start the engine; external OpenCode/Ollama calls are mocked for determinism.
+  city map, house panel, the High Lord Court, and the Phase 5 Ollama UI surface). E2E boots
+  web-only with a dedicated database and does **not** start the engine; external
+  OpenCode/Ollama calls are mocked for determinism.

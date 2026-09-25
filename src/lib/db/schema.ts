@@ -180,7 +180,7 @@ export const tasks = sqliteTable(
     check("ck_tasks_priority", sql`priority in ('low','medium','high','urgent')`),
     check(
       "ck_tasks_status",
-      sql`status in ('queued','running','awaiting_approval','awaiting_input','completed','failed','cancelled','interrupted')`,
+      sql`status in ('queued','running','awaiting_approval','awaiting_input','completed','failed','cancelled','interrupted','paused')`,
     ),
     check("ck_tasks_working_dir_abs", sql`working_directory is null or working_directory like '/%'`),
   ],
@@ -237,7 +237,7 @@ export const executionSessions = sqliteTable(
     index("idx_execution_sessions_status").on(t.status),
     check(
       "ck_execution_sessions_status",
-      sql`status in ('pending','running','awaiting_approval','awaiting_input','completed','failed','aborted','interrupted')`,
+      sql`status in ('pending','running','awaiting_approval','awaiting_input','completed','failed','aborted','interrupted','paused')`,
     ),
     check("ck_execution_sessions_provider", sql`provider in ('opencode','ollama')`),
   ],
@@ -285,6 +285,11 @@ export const agentMessages = sqliteTable(
       .references(() => executionSessions.id, { onDelete: "cascade" }),
     role: text("role").notNull(),
     content: text("content").notNull(),
+    /** JSON `OllamaToolCall[]` on an assistant turn persisted by the tool loop.
+     * OpenCode ignores this column. */
+    toolCalls: text("tool_calls").notNull().default("[]"),
+    /** Links a role='tool' result to the assistant tool_call that produced it. */
+    toolCallId: text("tool_call_id"),
     /** Engine-only outbound marker: set once a user message has been relayed to
      * the provider so a slow agent reply never re-sends the same prompt on every
      * poll tick. Survives engine restart (reconcile re-queues on stale sessions). */
@@ -298,7 +303,7 @@ export const agentMessages = sqliteTable(
   (t) => [
     index("idx_agent_messages_session").on(t.sessionId),
     index("idx_agent_messages_provider").on(t.providerMessageId),
-    check("ck_agent_messages_role", sql`role in ('user','agent')`),
+    check("ck_agent_messages_role", sql`role in ('user','agent','tool')`),
   ],
 );
 

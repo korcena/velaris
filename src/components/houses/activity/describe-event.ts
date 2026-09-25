@@ -149,5 +149,15 @@ function describePlanMessage(
     return { kind: "text", tone: "muted", label: "Steering reply (no plan change)" };
   }
 
+  // Phase 5 native pause/resume message events ({ pause: true/false }) — the
+  // Ollama runtime emits these on the pause/resume routes so the Activity feed
+  // reads well.
+  if (p.pause === true) {
+    return { kind: "system", tone: "gold", label: "Quest paused", text: str(p, "note") };
+  }
+  if (p.pause === false) {
+    return { kind: "system", tone: "default", label: "Quest resumed", text: str(p, "note") };
+  }
+
   return { kind: "text", tone: "default", label: "Message", text: str(p, "text") };
 }

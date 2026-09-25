@@ -121,6 +121,7 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "failed",
   "cancelled",
   "interrupted",
+  "paused",
 ] as const;
 
 /** execution_sessions.status values (echoed by ck_execution_sessions_status). */
@@ -133,6 +134,7 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
   "failed",
   "aborted",
   "interrupted",
+  "paused",
 ] as const;
 
 /** execution_events.type values (echoed by ck_execution_events_type). */
@@ -168,7 +170,11 @@ export const APPROVAL_KINDS: readonly ["permission", "question"] = [
 ] as const;
 
 /** agent_messages.role values (echoed by ck_agent_messages_role). */
-export const AGENT_MESSAGE_ROLES: readonly ["user", "agent"] = ["user", "agent"] as const;
+export const AGENT_MESSAGE_ROLES: readonly ["user", "agent", "tool"] = [
+  "user",
+  "agent",
+  "tool",
+] as const;
 
 /** artifacts.kind values (echoed by ck_artifacts_kind). */
 export const ARTIFACT_KINDS: readonly ArtifactKind[] = [

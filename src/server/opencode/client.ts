@@ -323,6 +323,28 @@ export class OpencodeClient {
     return Array.isArray(body) ? body.map(normalizeSessionInfo) : [];
   }
 
+  /**
+   * EXPERIMENTAL WORKTREE ISOLATION SCAFFOLD (Phase 5 Stage I — decision Q7,
+   * default OFF).
+   *
+   * `GET /experimental/worktree` is an OpenCode server endpoint that is NOT in
+   * this client's verified set (it is experimental and unverifiable without a
+   * live server on this machine). This method is deliberately an INERT SCAFFOLD:
+   * it is only ever invoked when the `experimental.worktreeIsolation` setting is
+   * ON, and it makes NO claim about live behaviour. When the flag is off (the
+   * default, and the only tested state) no code path calls it, so existing
+   * execution is never affected.
+   *
+   * The request shape is best-effort and documented as unverified.
+   */
+  async worktree(directory: string): Promise<{ ok?: boolean; isolated?: boolean }> {
+    const query = `?directory=${encodeURIComponent(directory)}`;
+    return await this.request<{ ok?: boolean; isolated?: boolean }>(
+      "GET",
+      `/experimental/worktree${query}`,
+    );
+  }
+
   async getSessionDiff(id: string): Promise<SessionDiffEntry[]> {
     const body = await this.request<SessionDiffEntry[]>("GET", `/session/${encodeURIComponent(id)}/diff`);
     return Array.isArray(body) ? body : [];

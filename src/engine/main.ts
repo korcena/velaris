@@ -24,6 +24,7 @@ import { closeDb, getRawDb, getDb } from "@/lib/db";
 import { seedDefaultProviderConfigs } from "@/server/repositories/provider-config-repo";
 import { seedHighLordHouse } from "@/server/repositories/house-repo";
 import { OpencodeClient } from "@/server/opencode";
+import { OllamaClient } from "@/server/execution/ollama/client";
 import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
 import { OpenCodeServerManager } from "./opencode-server";
 import { reconcile } from "./reconcile";
@@ -95,11 +96,14 @@ async function main(): Promise<void> {
   // 6. Task queue loop. The queue health-gates execution, so it is safe to start
   //    polling immediately even when the server is still coming up.
   const abortController = new AbortController();
+  // Ollama client for executionProvider='ollama' houses (Phase 5 Stage B+).
+  const ollamaClient = new OllamaClient({ signal: abortController.signal });
   const queue = new TaskQueue({
     db,
     raw,
     adapter: createOpenCodeAdapter({ client, db }),
     client,
+    ollamaClient,
     signal: abortController.signal,
     log,
   });

@@ -35,6 +35,11 @@ const RUNTIME_STYLES: Record<HouseRuntimeStatus, { label: string; className: str
     className: "border-velaris-crimson/40 bg-velaris-crimson/10 text-velaris-crimson",
     dot: "bg-velaris-crimson",
   },
+  paused: {
+    label: "Paused",
+    className: "border-velaris-gold/40 bg-velaris-gold/5 text-velaris-gold",
+    dot: "bg-velaris-gold",
+  },
 };
 
 export function RuntimeStatusBadge({

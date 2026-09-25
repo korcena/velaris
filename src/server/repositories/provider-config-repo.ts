@@ -185,3 +185,30 @@ export function deleteProviderConfig(db: VelarisDb, id: string): void {
   if (!existing) throw new ProviderConfigNotFoundError(id);
   db.delete(providerConfigs).where(eq(providerConfigs.id, id)).run();
 }
+
+/**
+ * EXPERIMENTAL WORKTREE ISOLATION (Phase 5 Stage I — Q7, default OFF).
+ *
+ * Reads `extra.experimental.worktreeIsolation` on the DEFAULT OpenCode provider
+ * config. This is an INERT SCAFFOLD flag: when OFF (the default and only tested
+ * state) nothing calls the OpenCode `/experimental/worktree` endpoint, so
+ * existing execution is unaffected. When ON the scaffold method exists on the
+ * client but its live behaviour is unverified (no server on this machine).
+ */
+export function getWorktreeIsolationEnabled(db: VelarisDb | Database.Database): boolean {
+  const raw: Database.Database =
+    "$client" in db
+      ? ((db as VelarisDb) as unknown as { $client: Database.Database }).$client
+      : (db as Database.Database);
+  const row = raw
+    .prepare(`SELECT extra FROM provider_configs WHERE type = 'opencode' AND is_default = 1 LIMIT 1`)
+    .get() as { extra: string } | undefined;
+  if (!row) return false;
+  try {
+    const extra = JSON.parse(row.extra) as Record<string, unknown>;
+    const ex = extra.experimental as Record<string, unknown> | undefined;
+    return ex?.worktreeIsolation === true;
+  } catch {
+    return false;
+  }
+}

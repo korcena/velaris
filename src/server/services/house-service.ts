@@ -64,11 +64,24 @@ export function createHouseService(db: VelarisDb, input: unknown): HouseDto {
 /** Parse & update; status provided via the nested patch would be ignored — use transitionHouseStatus. */
 export function updateHouseService(db: VelarisDb, id: string, input: unknown): HouseDto {
   const parsed = houseUpdateSchema.parse(input);
+  const configPatch = parsed.configuration as Partial<HouseConfiguration> | undefined;
+  // Phase 5 decision Q9: the High Lord's planning + steering rely on OpenCode
+  // (getSession/listMessages), so it must never run on the Ollama runtime. Reject
+  // a PATCH that would set executionProvider='ollama' on a high_lord house with
+  // 422. Only thrown when the patch would actually make that change.
+  if (configPatch?.executionProvider === "ollama") {
+    const existing = getHouse(db, id);
+    if (existing?.kind === "high_lord") {
+      throw new HighLordTransitionError(
+        "The Court's planning session requires OpenCode — the High Lord cannot use the Ollama runtime",
+      );
+    }
+  }
   const patch = {
     name: parsed.name,
     description: parsed.description,
     agent: parsed.agent as Partial<HouseAgent> | undefined,
-    configuration: parsed.configuration as Partial<HouseConfiguration> | undefined,
+    configuration: configPatch,
   };
   return repoUpdate(db, id, patch);
 }

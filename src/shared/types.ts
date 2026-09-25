@@ -115,7 +115,8 @@ export type TaskStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "interrupted";
+  | "interrupted"
+  | "paused";
 
 export interface ExecutionPreferences {
   model?: string | null;
@@ -165,7 +166,8 @@ export type SessionStatus =
   | "completed"
   | "failed"
   | "aborted"
-  | "interrupted";
+  | "interrupted"
+  | "paused";
 
 /** execution_events.type values. Mirrored in schema CHECK + constants. */
 export type ExecutionEventType =
@@ -207,6 +209,13 @@ export interface CostSummary {
   outputTokens: number;
   reasoningTokens: number;
   cacheReadTokens: number;
+  /**
+   * Additive (Phase 5 decision Q12): true when ANY usage record aggregated into
+   * this summary was flagged `estimated` (i.e. an Ollama local run priced from a
+   * settings table — never a provider-reported cost). Absent/false ⇒ all
+   * provider-reported (OpenCode). Optional so existing consumers are unaffected.
+   */
+  estimated?: boolean;
 }
 
 /**
@@ -253,7 +262,7 @@ export interface ExecutionEventDto {
 export interface AgentMessageDto {
   id: Id;
   sessionId: Id;
-  role: "user" | "agent";
+  role: "user" | "agent" | "tool";
   content: string;
   createdAt: IsoTimestamp;
 }
@@ -308,7 +317,8 @@ export type HouseRuntimeStatus =
   | "planning"
   | "working"
   | "awaiting_approval"
-  | "awaiting_input";
+  | "awaiting_input"
+  | "paused";
 
 /** HouseDto extended with Phase 2 runtime detail. */
 export interface HouseDetailDto extends HouseDto {

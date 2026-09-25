@@ -44,17 +44,80 @@ export default function SettingsPage() {
   // Appearance
   const [reducedMotion, setReducedMotion] = useState(false);
 
+  // Phase 5 pricing editor + worktree flag (Q5/Q7). Worktree isolation is an
+  // INERT scaffold that defaults OFF; the flag just opts into the (unverified)
+  // OpenCode /experimental/worktree method on the OpenCode client.
+  const [pricingRows, setPricingRows] = useState<Array<{ modelId: string; inputPer1M: string; outputPer1M: string }>>([]);
+  const [pricingLoaded, setPricingLoaded] = useState(false);
+  const [worktreeIsolation, setWorktreeIsolation] = useState(false);
+  const [worktreeLoaded, setWorktreeLoaded] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await apiFetch<{ providerConfigs: ProviderConfigDto[] }>("/api/provider-configs");
       setProviderConfigs(res.providerConfigs);
+      seedPricingAndWorktree(res.providerConfigs);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load provider configs");
     } finally {
       setLoading(false);
     }
   }, []);
+
+  /** Populate the Ollama pricing table and OpenCode worktree flag from stored configs. */
+  function seedPricingAndWorktree(configs: ProviderConfigDto[]) {
+    const ollama = configs.find((c) => c.type === "ollama");
+    const rawPricing = (ollama?.extra?.modelPricing as Record<string, { inputPer1M?: unknown; outputPer1M?: unknown }>) ?? {};
+    const rows: Array<{ modelId: string; inputPer1M: string; outputPer1M: string }> = [];
+    for (const [modelId, v] of Object.entries(rawPricing)) {
+      rows.push({
+        modelId,
+        inputPer1M: String(v?.inputPer1M ?? ""),
+        outputPer1M: String(v?.outputPer1M ?? ""),
+      });
+    }
+    setPricingRows(rows);
+    setPricingLoaded(true);
+
+    const opencode = configs.find((c) => c.type === "opencode");
+    const ex = (opencode?.extra?.experimental as { worktreeIsolation?: boolean } | undefined);
+    setWorktreeIsolation(ex?.worktreeIsolation === true);
+    setWorktreeLoaded(true);
+  }
+
+  async function savePricing() {
+    const ollama = providerConfigs.find((c) => c.type === "ollama");
+    if (!ollama) {
+      toast.error("No Ollama provider config found");
+      return;
+    }
+    const modelPricing: Record<string, { inputPer1M: number; outputPer1M: number }> = {};
+    for (const row of pricingRows) {
+      const modelId = row.modelId.trim();
+      const inputPer1M = Number(row.inputPer1M);
+      const outputPer1M = Number(row.outputPer1M);
+      if (!modelId) continue;
+      if (Number.isFinite(inputPer1M) && Number.isFinite(outputPer1M) && inputPer1M >= 0 && outputPer1M >= 0) {
+        modelPricing[modelId] = { inputPer1M, outputPer1M };
+      }
+    }
+    const extra = { ...(ollama.extra ?? {}), modelPricing };
+    await updateProviderConfig(ollama.id, { extra });
+    toast.success("Pricing saved");
+  }
+
+  async function toggleWorktree(enabled: boolean) {
+    const opencode = providerConfigs.find((c) => c.type === "opencode");
+    if (!opencode) {
+      toast.error("No OpenCode provider config found");
+      return;
+    }
+    const extra = { ...(opencode.extra ?? {}), experimental: { worktreeIsolation: enabled } };
+    setWorktreeIsolation(enabled);
+    await updateProviderConfig(opencode.id, { extra });
+    toast.success(enabled ? "Worktree isolation (experimental) enabled" : "Worktree isolation disabled");
+  }
 
   useEffect(() => {
     void load();
@@ -133,7 +196,7 @@ export default function SettingsPage() {
     }
   }
 
-  async function updateProviderConfig(id: string, patch: { isDefault?: boolean; baseUrl?: string }) {
+  async function updateProviderConfig(id: string, patch: { isDefault?: boolean; baseUrl?: string; extra?: Record<string, unknown> }) {
     try {
       const res = await apiFetch<{ providerConfig: ProviderConfigDto }>(
         `/api/provider-configs/${id}`,
@@ -309,6 +372,109 @@ export default function SettingsPage() {
               </div>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      {/* Phase 5 — Ollama pricing editor (Q5) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif-display text-xl">Ollama Model Pricing</CardTitle>
+          <CardDescription>
+            USD per 1M input/output tokens for local Ollama models. Used to estimate Ollama run
+            costs. A model with no price is billed $0 but still flagged &ldquo;estimated&rdquo;
+            (honest — local-Ollama pricing is unknown by default).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!pricingLoaded ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="grid grid-cols-[1fr_7rem_7rem] gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span>Model id</span>
+                <span>Input /1M</span>
+                <span>Output /1M</span>
+              </div>
+              {pricingRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No prices configured yet.</p>
+              ) : (
+                pricingRows.map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-[1fr_7rem_7rem] gap-2">
+                    <Input
+                      aria-label={`Model id for row-${idx}`}
+                      value={row.modelId}
+                      placeholder="e.g. llama3.1:8b"
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPricingRows((prev) => prev.map((r, i) => (i === idx ? { ...r, modelId: v } : r)));
+                      }}
+                    />
+                    <Input
+                      aria-label={`Input price for row-${idx}`}
+                      type="number"
+                      min={0}
+                      step="0.0001"
+                      value={row.inputPer1M}
+                      onChange={(e) =>
+                        setPricingRows((prev) => prev.map((r, i) => (i === idx ? { ...r, inputPer1M: e.target.value } : r)))
+                      }
+                    />
+                    <Input
+                      aria-label={`Output price for row-${idx}`}
+                      type="number"
+                      min={0}
+                      step="0.0001"
+                      value={row.outputPer1M}
+                      onChange={(e) =>
+                        setPricingRows((prev) => prev.map((r, i) => (i === idx ? { ...r, outputPer1M: e.target.value } : r)))
+                      }
+                    />
+                  </div>
+                ))
+              )}
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setPricingRows((prev) => [...prev, { modelId: "", inputPer1M: "", outputPer1M: "" }])
+                }
+                data-testid="add-pricing-row"
+              >
+                <Plus className="mr-1 h-4 w-4" /> Add model
+              </Button>
+              <Button onClick={() => void savePricing()} data-testid="save-pricing">
+                <Save className="mr-2 h-4 w-4" /> Save pricing
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Phase 5 — Experimental worktree isolation (Stage I, Q7: inert scaffold, default OFF) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif-display text-xl">Experimental — Worktree</CardTitle>
+          <CardDescription>
+            OpenCode-only experimental worktree isolation. Off by default. This is an inert scaffold:
+            it surfaces the OpenCode /experimental/worktree toggle but makes no claim that live
+            isolation is verified (requires a live OpenCode server).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between rounded-lg border border-border bg-card/40 p-3">
+            <div>
+              <p className="font-medium text-foreground">Worktree isolation</p>
+              <p className="text-xs text-muted-foreground">
+                When off (default) no code path touches the experimental endpoint; enabling it opts
+                into an unverified scaffold.
+              </p>
+            </div>
+            <Switch
+              checked={worktreeIsolation}
+              onCheckedChange={(v) => void toggleWorktree(v)}
+              disabled={!worktreeLoaded}
+              aria-label="Worktree isolation (experimental)"
+            />
+          </div>
         </CardContent>
       </Card>
 

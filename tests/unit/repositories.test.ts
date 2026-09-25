@@ -57,6 +57,13 @@ import {
   TaskNotFoundError,
   InvalidTaskStatusTransitionError,
 } from "@/server/repositories/task-repo";
+import {
+  createExecutionSession,
+  createAgentMessage,
+  upsertAgentMessage,
+  listAgentMessagesForSession,
+} from "@/server/repositories/execution-repo";
+import { agentMessages } from "@/lib/db/schema";
 
 let tmpDir: string;
 let dbPath: string;
@@ -607,5 +614,72 @@ describe("task repository", () => {
     const task = createTask(db, { title: "T" });
     deleteTask(db, task.id);
     expect(getTask(db, task.id)).toBeNull();
+  });
+});
+
+/* ================================================================== */
+/* agent_messages — Phase 5 tool-loop columns                          */
+/* ================================================================== */
+
+describe("agent_messages tool-loop columns", () => {
+  function seedSession(houseId?: string): { sessionId: string; houseId: string } {
+    const h = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: { ...houseConfiguration, executionProvider: "opencode" },
+    });
+    const task = createTask(getDb(), { title: "T", houseId: h.id });
+    const session = createExecutionSession(getDb(), {
+      taskId: task.id,
+      houseId: houseId ?? h.id,
+      provider: "opencode",
+      modelId: "glm-5.3",
+    });
+    return { sessionId: session.id, houseId: h.id };
+  }
+
+  it("round-trips a role='tool' message with toolCallId (upsertAgentMessage)", () => {
+    const { sessionId } = seedSession();
+    upsertAgentMessage(getDb(), {
+      sessionId,
+      role: "tool",
+      content: "ok: wrote /work/a.txt",
+      toolCallId: "call_1",
+    });
+
+    const msgs = listAgentMessagesForSession(getDb(), sessionId);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].role).toBe("tool");
+    expect(msgs[0].content).toBe("ok: wrote /work/a.txt");
+  });
+
+  it("round-trips an assistant message carrying tool_calls JSON", () => {
+    const { sessionId } = seedSession();
+    const toolCalls = JSON.stringify([
+      { function: { name: "fs_read", arguments: { path: "/work/a.txt" } } },
+    ]);
+    createAgentMessage(getDb(), {
+      sessionId,
+      role: "agent",
+      content: "I'll read that.",
+      toolCalls,
+    });
+    const msgs = listAgentMessagesForSession(getDb(), sessionId);
+    expect(msgs[0].role).toBe("agent");
+    // The DTO surfaces role/content; toolCalls lives on the row (not DTO).
+    const raw = getDb().select().from(agentMessages).all();
+    expect(raw.find((r) => r.sessionId === sessionId)?.toolCalls).toBe(toolCalls);
+  });
+
+  it("rejects an unknown role via the CHECK constraint", () => {
+    const { sessionId } = seedSession();
+    expect(() =>
+      createAgentMessage(getDb(), {
+        sessionId,
+        role: "system" as never,
+        content: "nope",
+      }),
+    ).toThrow(/CHECK constraint failed|constraint failed/i);
   });
 });

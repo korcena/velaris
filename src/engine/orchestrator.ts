@@ -120,7 +120,7 @@ function emitMessage(
 }
 
 const TERMINAL_TASK = ["completed", "failed", "cancelled", "interrupted"] as const;
-const ACTIVE_SESSION: SessionStatus[] = ["pending", "running", "awaiting_approval", "awaiting_input"];
+const ACTIVE_SESSION: SessionStatus[] = ["pending", "running", "awaiting_approval", "awaiting_input", "paused"];
 
 function maxSubtasksFor(parent: TaskDto): number {
   const v = parent.executionPreferences?.maxSubtasks;
@@ -605,7 +605,8 @@ async function mirrorChildren(
     if (
       child.status === "running" ||
       child.status === "awaiting_approval" ||
-      child.status === "awaiting_input"
+      child.status === "awaiting_input" ||
+      child.status === "paused"
     ) {
       if (state !== "in_flight") setSubtaskStatus(deps.db, s.id, "in_flight");
       continue;

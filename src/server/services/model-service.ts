@@ -1,17 +1,23 @@
 /**
  * Model listing service — backs GET /api/models (the house-config model picker).
  *
- * Proxies OpenCode's `GET /api/model` (via the engine's client) and enriches each
- * model with a human-readable provider label from `GET /api/provider`. Keeps a
- * short in-memory cache so every house-form open / dialog re-render doesn't hammer
- * the OpenCode server; a failed / unreachable server degrades to an empty list with
- * `available: false` rather than throwing.
+ * Provider-aware (Phase 5 decision Q8):
+ *  - providerId='opencode' (default): proxies OpenCode `GET /api/model`, enriched
+ *    with a human-readable provider label from `GET /api/provider`.
+ *  - providerId='ollama': sources from Ollama `GET /api/tags` (OllamaClient.
+ *    listModels()). These are plain model ids with `providerId='ollama'`.
+ *  - Any provider: the house form keeps a free-text fallback so house creation
+ *    works with NO server running (available:false → UI shows text input).
  *
- * Layering: lives under src/server and is imported by the route only (never by
- * src/app UI components directly).
+ * Keeps a short in-memory cache so every house-form open / re-render doesn't
+ * hammer the server; a failed / unreachable server degrades to an empty list
+ * with `available: false` rather than throwing.
+ *
+ * Layering: lives under src/server and is imported by the route only.
  */
 
 import type { OpencodeClient } from "@/server/opencode";
+import type { OllamaClient } from "@/server/execution/ollama/client";
 
 /** A model entry the UI can render in a picker. */
 export interface ModelDto {
@@ -28,18 +34,32 @@ export interface ListModelsResult {
 }
 
 const CACHE_TTL_MS = 30_000;
-let _cache: { at: number; result: ListModelsResult } | null = null;
+let _cache: { at: number; provider: string; result: ListModelsResult } | null = null;
 
-/** Get the model list for a client, honouring the short in-memory cache. */
+/** Provider dispatch — OpenCode by default, Ollama when providerId='ollama'. */
 export async function listModels(
   client: OpencodeClient,
   providerFilter?: string | null,
+  ollamaClient?: OllamaClient | null,
 ): Promise<ListModelsResult> {
+  const provider = providerFilter === "ollama" ? "ollama" : "opencode";
   const now = Date.now();
-  if (_cache && now - _cache.at < CACHE_TTL_MS) {
+  if (_cache && now - _cache.at < CACHE_TTL_MS && _cache.provider === provider) {
     return _cache.result;
   }
+  const result =
+    provider === "ollama"
+      ? await listOllamaModels(ollamaClient)
+      : await listOpencodeModels(client, providerFilter);
+  _cache = { at: now, provider, result };
+  return result;
+}
 
+/** OpenCode model list (existing behavior, provider-filtered after enrichment). */
+async function listOpencodeModels(
+  client: OpencodeClient,
+  providerFilter?: string | null,
+): Promise<ListModelsResult> {
   let rawModels: Array<{ id: string; providerID: string }> = [];
   let providerNames = new Map<string, string>();
   let available = false;
@@ -58,7 +78,6 @@ export async function listModels(
       // Provider enrichment is best-effort; fall back to ids as labels.
     }
   } catch {
-    // OpenCode unreachable → graceful empty fallback (UI shows a text fallback).
     available = false;
     rawModels = [];
     providerNames = new Map();
@@ -79,10 +98,25 @@ export async function listModels(
   const filtered = providerFilter
     ? models.filter((m) => m.providerId === providerFilter)
     : models;
+  return { models: filtered, available };
+}
 
-  const result: ListModelsResult = { models: filtered, available };
-  _cache = { at: now, result };
-  return result;
+/** Ollama model list — GET /api/tags → plain model ids tagged providerId='ollama'. */
+async function listOllamaModels(ollamaClient?: OllamaClient | null): Promise<ListModelsResult> {
+  if (!ollamaClient) return { models: [], available: false };
+  try {
+    const names = await ollamaClient.listModels();
+    const models: ModelDto[] = names.map((id) => ({
+      id,
+      providerId: "ollama",
+      providerName: "Ollama",
+      modelId: id,
+      displayName: id,
+    }));
+    return { models, available: true };
+  } catch {
+    return { models: [], available: false };
+  }
 }
 
 /** Test helper: drop the in-memory model cache. */

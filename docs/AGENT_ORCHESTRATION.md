@@ -71,7 +71,7 @@ One interface, two implementations (OpenCode now, Ollama-direct in Phase 5). The
 codes against this interface only.
 
 ```ts
-// src/engine/adapters/types.ts
+// src/server/execution/types.ts
 import type { ExecutionEvent, ApprovalRequestInput } from '../../shared/types'
 
 export interface StartTaskInput {
@@ -133,14 +133,14 @@ gracefully** (log `execution_events.type='unknown'` + payload, never crash, neve
 | OpenCode event | Velaris ExecutionEvent | House status transition (§4) | UI effect (Phase 3) |
 |---|---|---|---|
 | session created / prompt sent | `session_started` | idle → planning (short window) → working | pulsing lights → glowing windows, chimney smoke |
-| `message.updated` (assistant parts: text) | `message_part` `{role:'assistant', text}` | (working) | activity timeline append |
+| `message.updated` (assistant parts: text) | `message` `{role:'assistant', text}` | (working) | activity timeline append |
 | `message.updated` (tool call part) | `tool_call` `{tool, args}` | working | timeline: tool chip |
 | `part.updated` (tool result) | `tool_result` `{tool, ok, summary}` | working | timeline: result |
-| `permission.updated` (pending) | `permission_request` | working → **waiting_approval** | 🐦 messenger bird + panel |
-| `question.updated` (pending) | `question_request` | working → **waiting_input** | 🐦 messenger bird (clarification) |
-| `permission.updated` / `question.updated` (resolved) | `status_change` | waiting_* → working | bird flies off, smoke resumes |
-| `session.updated` (cost/tokens deltas) | `usage_update` | — | usage counter tick |
-| `session.updated` (session end / idle) | `completion` (or `error` if failed) | working → completed / failed | fireworks (once per task) / error indicator |
+| `permission.updated` (pending) | `approval_requested` | working → **awaiting_approval** | 🐦 messenger bird + panel |
+| `question.updated` (pending) | `approval_requested` | working → **awaiting_input** | 🐦 messenger bird (clarification) |
+| `permission.updated` / `question.updated` (resolved) | `approval_resolved` | waiting_* → working | bird flies off, smoke resumes |
+| `session.updated` (cost/tokens deltas) | `usage` | — | usage counter tick |
+| `session.updated` (session end / idle) | `task_completed` (or `task_failed` if failed) | working → completed / failed | fireworks (once per task) / error indicator |
 | any unknown event type | `unknown` (raw payload kept) | none | nothing (logged) |
 
 Mapping rules:

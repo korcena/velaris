@@ -162,6 +162,50 @@ describe("reconcile", () => {
     await expect(reconcile(getDb(), getRawDb(), client, log)).resolves.toBeUndefined();
     expect(log.mock.calls.join(" ")).toMatch(/failed|complete/i);
   });
+
+  it("M3: does NOT requeue a user-paused Ollama task after an engine restart — the session is marked interrupted but the TASK stays paused", async () => {
+    // A native Ollama task was user-paused (session + task both `paused`). On
+    // engine restart, reconcile must NOT silently re-execute it as fresh work.
+    const ll = [tmpDir];
+    const house = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: { ...makeHouseConfig(ll), executionProvider: "ollama", modelId: "llama3.1:8b" },
+    });
+    const task = createTask(getDb(), { title: "T", houseId: house.id, workingDirectory: tmpDir });
+    setTaskStatus(getDb(), task.id, "paused");
+    const session = createExecutionSession(getDb(), {
+      taskId: task.id,
+      houseId: house.id,
+      provider: "ollama",
+      modelId: "llama3.1:8b",
+      directory: tmpDir,
+    });
+    setSessionStatus(getDb(), session.id, "paused");
+
+    // Ollama sessions have providerSessionId null → reconcile takes the stale
+    // path (marks interrupted). But the task must NOT be requeued as fresh work.
+    const client = makeClient();
+    await reconcile(getDb(), getRawDb(), client, () => {});
+
+    expect(getExecutionSession(getDb(), session.id)?.status).toBe("interrupted");
+    // M3: the user's pause intent is preserved — the task stays PAUSED (not
+    // requeued to a fresh run), so resume can continue in place on the next boot.
+    expect(getTask(getDb(), task.id)?.status).toBe("paused");
+  });
+
+  it("M3: reconcile behavior for a paused OpenCode session is UNCHANGED (requeued as fresh work — OpenCode cannot resume in place)", async () => {
+    // OpenCode has no native pause; a `paused` status is not expected there, but
+    // we must not regress Phase 4 behavior. With a stale OpenCode session, the
+    // task is requeued for a fresh run (as before).
+    const { task, session } = seedInflight(); // OpenCode provider
+    setSessionStatus(getDb(), session.id, "paused");
+    const client = makeClient();
+    await reconcile(getDb(), getRawDb(), client, () => {});
+    expect(getExecutionSession(getDb(), session.id)?.status).toBe("interrupted");
+    expect(getTask(getDb(), task.id)?.status).toBe("queued");
+  });
 });
 
 /* ================================================================== */

@@ -32,6 +32,8 @@ export function createOpenCodeAdapter(deps: OpenCodeAdapterDeps): AgentExecution
   const { client } = deps;
 
   return {
+    kind: "opencode",
+    supportsNativePause: false,
     async startTask(input: StartTaskInput): Promise<{ providerSessionId: string | null }> {
       // createSession with the working directory; OpenCode scopes sessions to dirs.
       const created = await client.createSession(input.workingDirectory);

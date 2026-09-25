@@ -191,6 +191,7 @@ describe("GET /api/houses/{id} — usage summary", () => {
       reasoningTokens: 0,
       cacheReadTokens: 0,
       sessions: 0,
+      estimated: false,
     });
   });
 

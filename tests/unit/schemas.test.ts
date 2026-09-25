@@ -31,7 +31,7 @@ import {
   courtSteerSchema,
   planExecutionPreferencesSchema,
 } from "@/shared/schemas/plan";
-import { ORCHESTRATION_DEFAULTS } from "@/shared/constants";
+import { ORCHESTRATION_DEFAULTS, TASK_STATUSES, SESSION_STATUSES, AGENT_MESSAGE_ROLES } from "@/shared/constants";
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -692,5 +692,25 @@ describe("common schema helpers", () => {
     expect(parseJson("[]", [1])).toEqual([]);
     expect(parseJson(null, [])).toEqual([]);
     expect(parseJson("not json", [1])).toEqual([1]);
+  });
+});
+
+/* ================================================================== */
+/* Phase 5 status/role parity (decision Q3/Q4)                         */
+/* ================================================================== */
+
+describe("Phase 5 status/role parity", () => {
+  it("TASK_STATUSES includes 'paused'", () => {
+    expect(TASK_STATUSES).toContain("paused");
+    expect(TASK_STATUSES).toContain("running");
+  });
+
+  it("SESSION_STATUSES includes 'paused'", () => {
+    expect(SESSION_STATUSES).toContain("paused");
+    expect(SESSION_STATUSES).toContain("running");
+  });
+
+  it("AGENT_MESSAGE_ROLES includes 'tool'", () => {
+    expect([...AGENT_MESSAGE_ROLES]).toEqual(["user", "agent", "tool"]);
   });
 });

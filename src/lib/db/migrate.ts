@@ -5,10 +5,28 @@
  * applied migrations in a `__drizzle_migrations` meta table, making this
  * naturally idempotent. Called from both the web process (on module load, via
  * a lazily-invoked helper) and the engine process (on start).
+ *
+ * FK-safety: drizzle's migrator wraps ALL migration statements — including the
+ * table-rebuild DROPs that CHECK-alter migrations emit (0001, 0004) — in a
+ * single `BEGIN…COMMIT`. SQLite forbids changing the `foreign_keys` pragma
+ * inside a transaction, so a `PRAGMA foreign_keys=OFF;` embedded inside a
+ * migration file is a NO-OP under drizzle: FKs stay ON, and `DROP TABLE`
+ * (parent) then CASCADEs into every referencing child (agent_messages,
+ * approval_requests, artifacts, usage_records, notifications, execution_events,
+ * subtasks, handoffs) — wiping real execution history on upgrade.
+ *
+ * To keep rebuild migrations non-destructive we disable FK enforcement on the
+ * raw connection BEFORE calling the migrator (the pragma is per-connection and
+ * cannot change mid-transaction, so it must be set ahead of the migrator's own
+ * BEGIN). After the migrator commits we restore `foreign_keys=ON` and run
+ * `PRAGMA foreign_key_check` as a safety net. This is the general guarantee and
+ * covers every rebuild migration (including 0001, which has the same latent
+ * OFF/ON pattern that was previously a no-op under drizzle).
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import type Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate as drizzleMigrate } from "drizzle-orm/better-sqlite3/migrator";
 import { getRawDb } from "./index";
@@ -30,10 +48,33 @@ function migrationsFolder(): string {
 
 /**
  * Apply any pending migrations. Idempotent — safe to call on every boot.
+ *
+ * See the module docblock for why `foreign_keys` must be disabled around the
+ * migrator's self-managed transaction. After a successful migrate we restore
+ * FK enforcement and assert no foreign-key relationship was invalidated by a
+ * rebuild (each child survives because the FK cascade was disabled, but a
+ * rebuild that leaves a dangling reference is still an error).
  */
 export function migrate(dbPath?: string): void {
   const db = getRawDb(dbPath);
-  const migrator = drizzle(db);
-  const folder = migrationsFolder();
-  drizzleMigrate(migrator, { migrationsFolder: folder });
+  // PRAGMA foreign_keys is per-connection and CANNOT be changed mid-transaction;
+  // disable it now so it stays OFF through the migrator's own BEGIN…COMMIT.
+  db.pragma("foreign_keys = OFF");
+  try {
+    const migrator = drizzle(db);
+    const folder = migrationsFolder();
+    drizzleMigrate(migrator, { migrationsFolder: folder });
+  } finally {
+    // Restore the production FK-enforcing mode that getRawDb established at
+    // connection time, regardless of whether a migration succeeded.
+    db.pragma("foreign_keys = ON");
+  }
+  // Safety net: assert no rebuild left a violation. Only valid to run outside a
+  // transaction with FK enforcement enabled.
+  const violations = db.pragma("foreign_key_check") as unknown as unknown[];
+  if (violations.length > 0) {
+    throw new Error(
+      `migrate: foreign key check failed after migration (${violations.length} violation(s))`,
+    );
+  }
 }

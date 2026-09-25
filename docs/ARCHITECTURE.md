@@ -289,7 +289,7 @@ tasks {   // Phase 1 stub — execution semantics land in Phase 2
 | `execution_events` | 2 | Append-only stream. `id INTEGER PK autoincrement` (SSE cursor!), `session_id` FK, `task_id`, `house_id`, `event_type`, `payload TEXT(JSON)`, `opencode_event_id`, `created_at`. Index `(session_id)`, `(id)`. |
 | `approval_requests` | 2 | `id`, `session_id` FK, `kind ('permission'\|'question')`, `provider_request_id` (OpenCode requestID), `title`, `details JSON` (type, path, command, options), `status ('pending'\|'approved'\|'rejected'\|'replied')`, `reply_message`, `timeout_at`, timestamps. UNIQUE `(provider_request_id)`. |
 | `notifications` | 2 | Roost feed. `id`, `house_id`, `task_id`, `approval_request_id`, `kind ('approval'\|'clarification'\|'task_completed'\|'task_failed'\|'info')`, `title`, `body`, `read INTEGER`, `created_at`. |
-| `agent_messages` | 2 | Chat memory for direct chat + Ollama runtime. `id`, `session_id`, `role ('user'\|'assistant'\|'tool')`, `content`, `created_at`. |
+| `agent_messages` | 2 | Chat memory for direct chat + Ollama runtime. `id`, `session_id`, `role ('user'\|'agent'\|'tool')`, `content`, `created_at` (+ `tool_calls`/`tool_call_id` for tool-loop memory, Phase 5). |
 | `artifacts` | 2 | `id`, `session_id`, `kind ('file_modified'\|'file_created'\|'diff'\|'test_result'\|'error')`, `path`, `content TEXT`, `created_at`. |
 | `usage_records` | 2/5 | `id`, `session_id`, `house_id`, `model_id`, `provider`, `input_tokens`, `output_tokens`, `reasoning_tokens`, `cache_tokens`, `cost`, `estimated INTEGER` (0 = provider-reported), `created_at`. |
 | `subtasks` | 4 | High Lord plan decomposition. `id`, `parent_task_id` FK(tasks), `task_id` FK (each subtask is a task), `order_index`, `depends_on JSON` (subtask ids). |

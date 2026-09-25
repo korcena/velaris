@@ -118,4 +118,21 @@ describe("High Lord guard (422)", () => {
     expect(house.kind).toBe("high_lord");
     expect(house.status).toBe("active");
   });
+
+  it("PATCH executionProvider='ollama' on the High Lord → 422 (Q9: planning requires OpenCode)", async () => {
+    const { id } = await ensureSeededHighLord();
+    const res = await patchHouse(
+      jsonReq("PATCH", `${BASE}/api/houses/${id}`, {
+        configuration: { executionProvider: "ollama" },
+      }),
+      idCtx(id),
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toMatch(/planning session requires OpenCode/i);
+    // The house's provider is unchanged — the guard is a hard reject, not a silent no-op.
+    const getRes = await getHouseById(req(`${BASE}/api/houses/${id}`), idCtx(id));
+    const { house } = await getRes.json();
+    expect(house.configuration.executionProvider).toBe("opencode");
+  });
 });

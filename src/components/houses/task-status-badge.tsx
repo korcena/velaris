@@ -42,6 +42,10 @@ const TASK_STATUS_STYLES: Record<TaskStatus, { label: string; className: string 
     label: "interrupted",
     className: "bg-velaris-silver-muted/15 text-muted-foreground",
   },
+  paused: {
+    label: "paused",
+    className: "bg-velaris-gold/15 text-velaris-gold",
+  },
 };
 
 /** Full task-status badge with the Phase 2 palette (Job F.1). */

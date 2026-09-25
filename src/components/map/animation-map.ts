@@ -26,6 +26,7 @@ export type CityVisualState =
   | "working"
   | "awaiting_approval"
   | "awaiting_input"
+  | "paused"
   | "dimmed";
 
 /**

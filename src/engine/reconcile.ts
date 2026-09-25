@@ -62,11 +62,12 @@ export async function reconcile(db: VelarisDb, raw: Database.Database, client: O
           // so a fresh runner/session re-runs the work (bug 3).
           log(`[reconcile] task ${task.title} had a live provider session ${info.id} but no owning runner — interrupting & requeueing`);
           await client.abortSession(session.providerSessionId).catch(() => { /* best-effort abort */ });
+          const pausedStatus = taskPausedStatus(db, task.houseId ?? "");
           setExecutionSessionStatus(db, session.id, "interrupted", {
             lastError: "Provider session orphaned by engine restart (no active runner)",
             finishedAt: new Date().toISOString(),
           });
-          setTaskStatus(db, task.id, "queued");
+          setTaskStatus(db, task.id, pausedStatus === "paused" ? "paused" : "queued");
           continue;
         }
       } catch {
@@ -76,11 +77,15 @@ export async function reconcile(db: VelarisDb, raw: Database.Database, client: O
 
     // Session is stale / provider unreachable → interrupt it and requeue.
     log(`[reconcile] task ${task.title} session interrupted (stale) — requeued`);
+    // M3: preserve the user's pause intent for a paused Ollama session. Compute
+    // the target status BEFORE interrupting the session (getActiveSessionForHouse
+    // no longer returns a session once it is flagged interrupted).
+    const pausedStatus = taskPausedStatus(db, task.houseId ?? "");
     setExecutionSessionStatus(db, session.id, "interrupted", {
       lastError: "Interrupted on engine restart (stale session)",
       finishedAt: new Date().toISOString(),
     });
-    setTaskStatus(db, task.id, "queued");
+    setTaskStatus(db, task.id, pausedStatus === "paused" ? "paused" : "queued");
   }
 
   // 2. Re-sync pending approvals from the provider.
@@ -136,7 +141,7 @@ async function reconcileHighLord(db: VelarisDb, log: (m: string) => void): Promi
     const hasSubtasks = listSubtasksForParent(db, task.id).length > 0;
     if (hasSubtasks) continue;
     const session = latestSessionForTask(db, task.id);
-    if (session && ["pending", "running", "awaiting_approval", "awaiting_input"].includes(session.status)) {
+    if (session && ["pending", "running", "awaiting_approval", "awaiting_input", "paused"].includes(session.status)) {
       continue; // planning session still live — queue/runner will handle it
     }
     log(`[reconcile] High Lord parent ${task.title} running with no plan — requeueing`);
@@ -158,4 +163,22 @@ function isHighLordParentWithPlan(db: VelarisDb, task: TaskRow): boolean {
 function latestSessionForTask(db: VelarisDb, taskId: string) {
   const sessions = listSessionsForTask(db, taskId);
   return sessions.length ? sessions[sessions.length - 1] : null;
+}
+
+/**
+ * Phase 5 M3b — determine whether a task's in-flight work was USER-PAUSED
+ * (session `paused`) so reconciliation PRESERVES the pause across an engine
+ * restart instead of requeueing it as fresh work (which would silently re-execute
+ * a safety-sensitive operation the user deliberately halted).
+ *
+ * Returns "paused" ONLY for a native Ollama session that is genuinely `paused`.
+ * OpenCode sessions have no native pause (supportNativePause=false) — for those
+ * we preserve the existing Phase 4 reconcile behaviour (mark interrupted + requeue
+ * a fresh run), because an OpenCode server session cannot be resumed in place.
+ */
+function taskPausedStatus(db: VelarisDb, houseId: string): "paused" | "queued" {
+  const session = getActiveSessionForHouse(db, houseId);
+  if (!session) return "queued";
+  if (session.provider === "ollama" && session.status === "paused") return "paused";
+  return "queued";
 }

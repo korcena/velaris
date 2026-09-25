@@ -37,6 +37,8 @@ describe("describeExecutionEvent mapping", () => {
     { type: "message", payload: { subtask: "s2", state: "completed", house: "h1" }, label: "Subtask s2 completed", tone: "default", kind: "text" },
     { type: "message", payload: { budget: true, reason: "token_budget_exceeded" }, label: "Token budget exceeded", tone: "crimson", kind: "text", text: "token_budget_exceeded" },
     { type: "message", payload: { plan: false, steer: true }, label: "Steering reply (no plan change)", tone: "muted", kind: "text" },
+    { type: "message", payload: { pause: true, note: "native pause" }, label: "Quest paused", tone: "gold", kind: "system", text: "native pause" },
+    { type: "message", payload: { pause: false, note: "native resume" }, label: "Quest resumed", tone: "default", kind: "system", text: "native resume" },
     { type: "tool_call", payload: { tool: { tool: "fs", input: "write /a" } }, label: "Tool call", tone: "default", kind: "tool", mono: "[fs] write /a" },
     { type: "tool_result", label: "Tool result", tone: "muted", kind: "system" },
     { type: "approval_requested", payload: { permission: "run" }, label: "Approval requested", tone: "gold", kind: "approval", text: "run" },

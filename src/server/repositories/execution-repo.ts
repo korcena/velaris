@@ -129,7 +129,7 @@ export function getActiveSessionForHouse(db: VelarisDb, houseId: string): Execut
     .orderBy(desc(executionSessions.createdAt))
     .all()
     .find((s) =>
-      ["pending", "running", "awaiting_approval", "awaiting_input"].includes(
+      ["pending", "running", "awaiting_approval", "awaiting_input", "paused"].includes(
         s.status as SessionStatus,
       ),
     );
@@ -299,12 +299,16 @@ function eventRowToDto(row: ExecutionEventRow): ExecutionEventDto {
 export interface CreateAgentMessageInput {
   id?: string;
   sessionId: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "tool";
   content: string;
   /** Provider message id — used as the dedupe key for streaming deltas. */
   providerMessageId?: string | null;
   /** Engine-only outbound marker: set once a user message is relayed. */
   relayedAt?: string | null;
+  /** JSON `OllamaToolCall[]` — persisted on assistant turns by the tool loop. */
+  toolCalls?: string | null;
+  /** Links a role='tool' result to the assistant tool_call that produced it. */
+  toolCallId?: string | null;
 }
 
 /**
@@ -346,9 +350,10 @@ export function upsertAgentMessage(
       content: input.content,
       providerMessageId: input.providerMessageId ?? null,
       relayedAt: input.relayedAt ?? null,
+      toolCalls: input.toolCalls ?? "[]",
+      toolCallId: input.toolCallId ?? null,
     })
-    .run();
-}
+    .run();}
 
 /** Backward-compatible insert (used by web POST messages and non-delta writes). */
 export function createAgentMessage(
@@ -386,7 +391,7 @@ export function listAgentMessagesForSession(
     .map((r) => ({
       id: r.id,
       sessionId: r.sessionId,
-      role: r.role as "user" | "agent",
+      role: r.role as "user" | "agent" | "tool",
       content: r.content,
       createdAt: r.createdAt,
     }));
@@ -865,6 +870,14 @@ export function getUsageSummaryForHouse(
     .where(eq(usageRecords.houseId, houseId))
     .get();
 
+  // Phase 5 Q12: estimated true when ANY of the house's usage rows is a local
+  // Ollama estimate (at least one row has estimated=1).
+  const estRow = db
+    .select({ estCount: count(sql`CASE WHEN estimated = 1 THEN 1 END`) })
+    .from(usageRecords)
+    .where(eq(usageRecords.houseId, houseId))
+    .get();
+
   const num = (v: unknown): number => {
     if (typeof v === "number") return v;
     if (typeof v === "bigint") return Number(v);
@@ -882,6 +895,8 @@ export function getUsageSummaryForHouse(
     reasoningTokens: num(row?.reasoningTokens),
     cacheReadTokens: num(row?.cacheReadTokens),
     sessions: num(row?.sessions),
+    // Q12: true when any row in this house's usage is an estimated (Ollama) cost.
+    estimated: num(estRow?.estCount) > 0,
   };
 }
 
@@ -917,6 +932,19 @@ export function getUsageSummaryForTask(
     )
     .get();
 
+  // Q12: any estimated (Ollama) row in this parent's rollup ⇒ estimated true.
+  const estRow = db
+    .select({ estCount: count(sql`CASE WHEN estimated = 1 THEN 1 END`) })
+    .from(usageRecords)
+    .where(
+      sql`${usageRecords.taskId} IN (
+        SELECT ${parentTaskId}
+        UNION
+        SELECT task_id FROM subtasks WHERE parent_task_id = ${parentTaskId}
+      )`,
+    )
+    .get();
+
   const num = (v: unknown): number => {
     if (typeof v === "number") return v;
     if (typeof v === "bigint") return Number(v);
@@ -933,5 +961,6 @@ export function getUsageSummaryForTask(
     outputTokens: num(row?.outputTokens),
     reasoningTokens: num(row?.reasoningTokens),
     cacheReadTokens: num(row?.cacheReadTokens),
+    estimated: num(estRow?.estCount) > 0,
   };
 }

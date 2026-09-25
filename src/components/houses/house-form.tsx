@@ -136,10 +136,10 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
 
   const execProvider = watch("configuration.executionProvider");
 
-  // Job G — model picker. Fetch GET /api/models once per mount. When the
-  // OpenCode server is reachable we render a Select; otherwise (or when the
-  // list is empty) we fall back to the free-text Input so house creation still
-  // works with the engine off (E2E hits this fallback path).
+  // Job G + Phase 5 Q8 — model picker. Fetch GET /api/models against the SELECTED
+  // execution provider (opencode → OpenCode models; ollama → Ollama /api/tags).
+  // When the server is unreachable (or the list empty) we fall back to free-text
+  // so house creation works with the engine off (E2E hits this fallback path).
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsAvailable, setModelsAvailable] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -148,7 +148,9 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
   useEffect(() => {
     let alive = true;
     setModelsLoading(true);
-    apiFetch<{ models: ModelOption[]; available: boolean }>("/api/models?providerId=opencode")
+    setModels([]);
+    const providerParam = execProvider;
+    apiFetch<{ models: ModelOption[]; available: boolean }>(`/api/models?providerId=${encodeURIComponent(providerParam)}`)
       .then((res) => {
         if (!alive) return;
         setModels(res.models ?? []);
@@ -163,7 +165,7 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [execProvider]);
 
   const groupedModels = useMemo(() => {
     const byProvider = new Map<string, ModelOption[]>();
@@ -349,6 +351,12 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
                     ))}
                   </SelectContent>
                 </Select>
+                {execProvider === "ollama" ? (
+                  <p className="text-xs text-velaris-teal">
+                    Native runtime — supports in-place pause/resume. The model runs directly against
+                    your Ollama server; costs are estimates priced from Settings.
+                  </p>
+                ) : null}
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -525,6 +533,12 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
                     </div>
                   ))}
                 </div>
+                {permissions.network === "deny" ? (
+                  <p className="text-xs text-muted-foreground">
+                    Network is denied — the web-fetch tool stays out of the runtime&apos;s registry
+                    unless Network is allowed (per-house opt-in).
+                  </p>
+                ) : null}
               </div>
             </TabsContent>
           </Tabs>

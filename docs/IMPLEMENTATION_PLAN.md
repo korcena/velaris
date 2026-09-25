@@ -365,6 +365,71 @@ if available (skipped otherwise — no local server on this machine, tests use m
 **Risks:** no local Ollama server → all tests mock the HTTP API; runtime complexity →
 strictly reuse the same adapter interface and event model as OpenCode.
 
+### Acceptance & Retro (2026-09-24)
+
+**Acceptance checklist (mapped to the criteria above):**
+
+- [x] **(a) An ollama-direct house completes a research task using tools with correct
+      permission gating.** Proven by the deterministic **mocked** smoke
+      `tests/unit/ollama-runtime.test.ts` (no local Ollama server on this machine; the loop
+      executes `fs_read`/`fs_write` within the allowlist and feeds `tool_result`s back,
+      including an approval round-trip). Supporting matrix: `ollama-permissions`,
+      `ollama-approval`, `ollama-tools`.
+- [x] **(b) Pausing actually suspends the loop.** `tests/unit/ollama-pause.test.ts` +
+      `tests/integration/ollama-pause-routes.test.ts`; no model call or tool execution occurs
+      while paused and resume continues in place from `agent_messages` memory. OpenCode houses
+      correctly report that they cannot pause (409).
+- [x] **(c) Costs are marked as estimates.** `tests/unit/ollama-pricing.test.ts` + usage
+      aggregation: every Ollama `usage_records` row is `estimated=1`, surfaced with an
+      "estimated" label on house overview, Court plan rollup and task results; provider-reported
+      OpenCode rows stay `estimated=0`.
+
+**Deliverables status (all landed):** Ollama adapter + `GET /api/version` health check
+(configurable base_url); Velaris agent runtime tool loop (model call → tool_use →
+permission-gated execute → tool_result → repeat); tool set (fs read/write within allowlist,
+shell exec with approval, git; web-fetch absent unless the per-house network opt-in is set,
+default `deny`); conversation memory in `agent_messages` (extended with
+`tool_calls`/`tool_call_id` + role `'tool'`, no new table); native pause/resume for this
+provider; estimated cost tracking (`provider_configs.extra.modelPricing`, missing price ⇒
+cost 0 but `estimated=true`); flag-gated **inert** worktree scaffold
+(`experimental.worktreeIsolation`, default OFF, OpenCode-only); UI surface (provider-aware
+pause/resume controls, estimated labels, Settings pricing editor + worktree flag, Ollama
+model picker via `/api/tags`, High Lord/ollama 422 guard).
+
+**Deviations / notable decisions:** Q1–Q12 accepted defaults are recorded in
+`docs/superpowers/plans/2026-09-24-phase5-ollama-runtime.md` §18 — that addendum is the
+source of truth and supersedes the plan's own sections. Notable items: prompt-parsed
+ReAct fallback **DEFERRED** (Q2; native `message.tool_calls` only); paused map animation
+**DEFERRED** to Phase 5.1 (Q10; badge + runtime status only); High Lord + `ollama`
+**disallowed with 422** (Q9); worktree is an **INERT scaffold**, `/experimental/worktree`
+live behavior **UNVERIFIED** (Q7); the usage record is written **once at terminal** (not
+per model call) to keep aggregation honest; `risky_only` treated as `always` for parity
+with the OpenCode runner (Q11).
+
+**Most significant defects found by independent testing/review and fixed during the phase:**
+
+1. **Migration `0004` destroyed existing execution data via FK cascade.** Drizzle runs all
+   migration statements in one transaction, so the in-file `PRAGMA foreign_keys=OFF` was a
+   no-op; the CHECK-rebuild `DROP TABLE` cascaded into every child table. Fixed generally in
+   `src/lib/db/migrate.ts` by disabling FKs on the raw connection *before* the migrator and
+   running `foreign_key_check` after — this also protects the latent identical pattern in
+   `0001`.
+2. High Lord supervisor ran while OpenCode was unhealthy.
+3. Resume stranded a queued-paused task.
+4. Usage/token aggregation overcounted multi-step runs.
+5. Tool args leaked into events (now redacted in the user-facing event; retained in model
+   memory).
+6. Shell interpreter code-string escapes (`bash -c`, combined `-lc`, absolute-path
+   interpreters, `env`/`nice`/`timeout` wrappers, git `-c`) — hardened with residual risk
+   documented (approval gating is the real control; the allowlist scopes cwd only).
+7. `web_fetch` SSRF blocklist.
+8. Ollama usage `modelId` was empty.
+
+**Residual / known limitations:** no live Ollama server here, so the tool loop's real HTTP
+contract is mock-verified only (an opt-in `@real` smoke is off the gate); non-interpreter
+RCE programs (`awk` system, `find -exec`, etc.) remain reachable and OS-level isolation is
+required for true containment.
+
 ---
 
 ## 10. Phase 6 — Advanced Platform

@@ -19,6 +19,7 @@ import {
   setSessionStatus,
   createApprovalRequest,
   createNotification,
+  getActiveSessionForHouse,
 } from "@/server/repositories/execution-repo";
 import type { HouseConfiguration } from "@/shared/types";
 import {
@@ -77,6 +78,7 @@ describe("deriveRuntimeStatus", () => {
     expect(deriveRuntimeStatus({ status: "running" })).toBe("working");
     expect(deriveRuntimeStatus({ status: "awaiting_approval" })).toBe("awaiting_approval");
     expect(deriveRuntimeStatus({ status: "awaiting_input" })).toBe("awaiting_input");
+    expect(deriveRuntimeStatus({ status: "paused" })).toBe("paused");
     expect(deriveRuntimeStatus({ status: "pending" })).toBe("planning");
     // terminal / unknown statuses derive to idle
     expect(deriveRuntimeStatus({ status: "completed" })).toBe("idle");
@@ -140,6 +142,27 @@ describe("buildHouseDetail", () => {
     expect(detail.runtimeStatus).toBe("awaiting_approval");
     expect(detail.pendingApprovals).toBe(1);
     expect(detail.activeTask.status).toBe("awaiting_approval");
+  });
+
+  it("a paused session is an active session (risk 9) and derives to 'paused'", () => {
+    const { house } = seed();
+    const task = createTask(getDb(), { title: "Quest", houseId: house.id });
+    setTaskStatus(getDb(), task.id, "paused");
+    const session = createExecutionSession(getDb(), {
+      taskId: task.id,
+      houseId: house.id,
+      provider: "ollama",
+      modelId: "llama3.1:8b",
+    });
+    setSessionStatus(getDb(), session.id, "paused");
+
+    // getActiveSessionForHouse must treat a paused session as active — the
+    // queue relies on it to never start a second task for the same house.
+    expect(getActiveSessionForHouse(getDb(), house.id)?.status).toBe("paused");
+
+    const detail = buildHouseDetail(getDb(), house);
+    expect(detail.runtimeStatus).toBe("paused");
+    expect(detail.activeTask.status).toBe("paused");
   });
 });
 
@@ -287,6 +310,67 @@ describe("getUsageSummaryForTask", () => {
       outputTokens: 0,
       reasoningTokens: 0,
       cacheReadTokens: 0,
+      estimated: false,
     });
+  });
+
+  it("flags estimated=true when any aggregated row is an Ollama estimate (Q12)", () => {
+    const hlHouse = createHouse(getDb(), {
+      name: "HL",
+      description: null,
+      agent: { name: "HL", role: "HL" },
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Parent quest", houseId: hlHouse.id });
+    const parentSession = seedSession(parent.id);
+    // One provider-reported OpenCode row (estimated=false)…
+    createUsageRecord(getDb(), {
+      sessionId: parentSession.sessionId,
+      taskId: parent.id,
+      houseId: parentSession.houseId,
+      modelId: "glm-5.3",
+      provider: "opencode",
+      cost: { cost: 10, inputTokens: 1000, outputTokens: 500 },
+      estimated: false,
+    });
+
+    // …and one estimated Ollama row → rollup must be estimated.
+    const child = createTask(getDb(), { title: "child", houseId: hlHouse.id });
+    const childSession = seedSession(child.id);
+    createUsageRecord(getDb(), {
+      sessionId: childSession.sessionId,
+      taskId: child.id,
+      houseId: childSession.houseId,
+      modelId: "llama3.1:8b",
+      provider: "ollama",
+      cost: { cost: 0, inputTokens: 10, outputTokens: 5 },
+      estimated: true,
+    });
+    const s = createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+    linkChildTask(getDb(), s.id, child.id);
+
+    const summary = getUsageSummaryForTask(getDb(), parent.id);
+    expect(summary.estimated).toBe(true);
+  });
+
+  it("all provider-reported rows ⇒ estimated=false", () => {
+    const hlHouse = createHouse(getDb(), {
+      name: "HL",
+      description: null,
+      agent: { name: "HL", role: "HL" },
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Parent", houseId: hlHouse.id });
+    const s = seedSession(parent.id);
+    createUsageRecord(getDb(), {
+      sessionId: s.sessionId,
+      taskId: parent.id,
+      houseId: s.houseId,
+      modelId: "glm-5.3",
+      provider: "opencode",
+      cost: { cost: 1, inputTokens: 10, outputTokens: 5 },
+      estimated: false,
+    });
+    expect(getUsageSummaryForTask(getDb(), parent.id).estimated).toBe(false);
   });
 });

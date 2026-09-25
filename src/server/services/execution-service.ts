@@ -31,6 +31,8 @@ export function deriveRuntimeStatus(
       return "awaiting_input";
     case "running":
       return "working";
+    case "paused":
+      return "paused";
     case "pending":
       return "planning";
     default:

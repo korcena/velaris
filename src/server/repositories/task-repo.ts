@@ -255,7 +255,7 @@ export function listInFlightTaskIds(db: VelarisDb): TaskRow[] {
     .select()
     .from(tasks)
     .where(
-      sql`status in ('running','awaiting_approval','awaiting_input','interrupted')`,
+      sql`status in ('running','awaiting_approval','awaiting_input','interrupted','paused')`,
     )
     .all();
 }

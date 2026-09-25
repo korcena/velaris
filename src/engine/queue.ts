@@ -12,9 +12,11 @@
 
 import type Database from "better-sqlite3";
 import type { VelarisDb } from "@/lib/db";
-import type { AgentExecutionProvider } from "@/server/execution/types";
+import type { AgentExecutionProvider, ProviderKind } from "@/server/execution/types";
 import { executeTask } from "@/server/execution/runner";
+import { runOllamaTask } from "@/server/execution/ollama/runtime";
 import { OpencodeClient } from "@/server/opencode";
+import { OllamaClient } from "@/server/execution/ollama/client";
 import type { HouseDto, TaskDto } from "@/shared/types";
 import { getHouse } from "@/server/repositories/house-repo";
 import { getTask } from "@/server/repositories/task-repo";
@@ -27,12 +29,15 @@ import { createExecutionEvent, getActiveSessionForHouse } from "@/server/reposit
 import { resolveSafePath, isPathAllowed } from "@/lib/paths";
 import { runParent, tickActivePlans } from "./orchestrator";
 import type { OrchestratorDeps } from "./orchestrator";
+import { providerHealth, resolveProviderKind } from "./provider-factory";
 
 export interface QueueDeps {
   db: VelarisDb;
   raw: Database.Database;
   adapter: AgentExecutionProvider;
   client: OpencodeClient;
+  /** Optional Ollama client — set when the engine owns one (Stage B+). */
+  ollamaClient?: OllamaClient;
   /** Signal aborted on engine shutdown — stops the queue + aborts in-flight. */
   signal?: AbortSignal;
   log: (msg: string) => void;
@@ -73,19 +78,15 @@ export class TaskQueue {
   /** One full queue pass. */
   private async processOnce(): Promise<void> {
     const { raw, db } = this.deps;
-    // Health gate (ARCHITECTURE §8): do not claim/execute tasks while the
-    // OpenCode server is unhealthy/not yet up. Tasks stay queued and are retried
-    // on the next tick once the server becomes healthy. This is the minimal
-    // health-gate — the queue runner must not attempt OpenCode work blindly.
-    try {
-      if (!(await this.deps.client.health())) {
-        this.deps.log("[queue] OpenCode server not healthy — skipping this tick");
-        return;
-      }
-    } catch {
-      this.deps.log("[queue] OpenCode health probe failed — skipping this tick");
-      return;
-    }
+    // Per-tick provider health cache — probe each provider kind ONCE at the top
+    // of the pass (mirroring the old single up-front OpenCode gate) so no
+    // per-task await re-orders claim dispatch. A down OpenCode must not block an
+    // Ollama house task, and vice-versa.
+    const kinds: ProviderKind[] = ["opencode", "ollama"];
+    const healthProbes = await Promise.all(
+      kinds.map(async (k) => [k, await providerHealth(k, this.deps)] as const),
+    );
+    const healthCache = new Map<ProviderKind, boolean>(healthProbes);
 
     // 1. Find queued tasks.
     const queuedIds = listQueuedTaskIds(raw);
@@ -93,6 +94,26 @@ export class TaskQueue {
     for (const taskId of queuedIds) {
       if (this.stopping) break;
       if (this.inFlight.has(taskId)) continue;
+
+      // 2. Per-task provider health gate BEFORE claim: leave the task queued and
+      //    retry next tick when the task's own provider is unhealthy. This
+      //    preserves the previous global OpenCode health-gate behaviour for
+      //    OpenCode tasks while letting Ollama tasks through when only OpenCode
+      //    is down.
+      const task = getTask(db, taskId);
+      if (!task || !task.houseId) {
+        // Handled by runClaimedTask below; let it claim to surface the failure.
+        if (!claimQueuedTask(raw, taskId)) continue;
+      } else {
+        const house = getHouse(db, task.houseId);
+        if (house) {
+          const kind = resolveProviderKind(house);
+          if (healthCache.get(kind) === false) {
+            this.deps.log(`[queue] ${kind} provider not healthy — leaving ${taskId} queued`);
+            continue;
+          }
+        }
+      }
 
       // Atomic claim.
       if (!claimQueuedTask(raw, taskId)) continue; // already taken
@@ -105,6 +126,15 @@ export class TaskQueue {
 
     // Supervisor pass: reconcile/advance active High Lord plans (mirror child
     // terminal states, release dependents, steer, budget, consolidate).
+    //
+    // OpenCode-dependent guard (pre-seam parity): `tickActivePlans` drives the
+    // High Lord court, which depends on the OpenCode server (steering,
+    // awaitSteerReply → client.getSession/listMessages). Restore the old
+    // `if (!(await client.health())) return;` guarantee for the supervisor:
+    // skip the ENTIRE supervisor pass when OpenCode is unhealthy so it does not
+    // hammer the down server every tick. This does NOT affect per-task provider
+    // dispatch above — an Ollama house task still proceeds when only OpenCode is
+    // down (Stage A's point, preserved).
     const orchestratorDeps: OrchestratorDeps = {
       db,
       raw,
@@ -112,7 +142,9 @@ export class TaskQueue {
       client: this.deps.client,
       log: this.deps.log,
     };
-    await tickActivePlans(orchestratorDeps);
+    if (healthCache.get("opencode") !== false) {
+      await tickActivePlans(orchestratorDeps);
+    }
   }
 
   /** Execute an already-claimed task. */
@@ -175,6 +207,40 @@ export class TaskQueue {
       if (!resolvedDir) return;
 
       this.deps.log(`[queue] running task ${task.title} for house ${house.name} in ${resolvedDir}`);
+
+      // Provider dispatch: OpenCode routes through the existing runner; Ollama
+      // routes to the native tool-loop runtime (Stage F). The OpenCode branch
+      // here is byte-identical to the pre-seam code.
+      const provider = resolveProviderKind(house);
+      if (provider === "ollama") {
+        if (!this.deps.ollamaClient) {
+          this.deps.log(`[queue] task ${task.title} for house ${house.name}: no Ollama client configured`);
+          setTaskStatus(db, task.id, "failed", "No Ollama client configured");
+          createExecutionEvent(db, {
+            taskId: task.id,
+            houseId: house.id,
+            rawType: "task_failed",
+            type: "task_failed",
+            payload: { error: "No Ollama client configured" },
+          });
+          return;
+        }
+        this.deps.log(`[queue] routing ${task.title} to the Ollama tool-loop runtime`);
+        const result = await runOllamaTask(
+          {
+            db,
+            raw,
+            ollama: this.deps.ollamaClient,
+            task,
+            house,
+            directory: resolvedDir,
+            modelId: house.configuration.modelId,
+          },
+          { signal },
+        );
+        this.deps.log(`[queue] task ${task.title} → ${result.terminalStatus}`);
+        return;
+      }
 
       // Build the run context.
       const result = await executeTask(

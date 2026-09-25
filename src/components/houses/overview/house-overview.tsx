@@ -122,7 +122,17 @@ export function HouseOverview({ house }: { house: HouseDetailDto }) {
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-            <KV label="Cost" value={`$${house.usage.total.toFixed(4)}`} />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Cost</span>
+              <span className="flex items-center gap-1 text-sm text-foreground">
+                ${house.usage.total.toFixed(4)}
+                {house.usage.estimated ? (
+                  <Badge variant="outline" className="bg-velaris-gold/10 text-velaris-gold">
+                    estimated
+                  </Badge>
+                ) : null}
+              </span>
+            </div>
             <KV label="Sessions" value={String(house.usage.sessions)} />
             <KV label="Input tokens" value={house.usage.inputTokens.toLocaleString()} />
             <KV label="Output tokens" value={house.usage.outputTokens.toLocaleString()} />

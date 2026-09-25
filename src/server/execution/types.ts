@@ -52,7 +52,20 @@ export interface SessionStatusInfo {
   /** Epoch ms of session creation (`time.created`). */
   createdMs?: number;
 }
+
+/**
+ * Discriminator for runtime dispatch + health gating (Phase 5 §4).
+ * Mirrors `agent_configurations.execution_provider` / `EXECUTION_PROVIDERS`.
+ */
+export type ProviderKind = "opencode" | "ollama";
+
 export interface AgentExecutionProvider {
+  /** Discriminator for runtime dispatch + health gating. */
+  readonly kind: ProviderKind;
+  /** True when the provider can truly suspend a running loop in place
+   * (native pause/resume — the Phase-5 Ollama runtime). OpenCode is always
+   * false: its only interruption primitive is abort. */
+  readonly supportsNativePause: boolean;
   /** Create + init a provider session and send the initial prompt. */
   startTask(input: StartTaskInput): Promise<{ providerSessionId: string | null }>;
   /** Send a follow-up message (chat / resume-after-abort). */

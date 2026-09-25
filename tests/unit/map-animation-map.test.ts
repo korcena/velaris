@@ -17,6 +17,7 @@ const RUNTIME_STATUSES: HouseRuntimeStatus[] = [
   "working",
   "awaiting_approval",
   "awaiting_input",
+  "paused",
 ];
 
 describe("statusToVisualState", () => {
@@ -45,7 +46,7 @@ describe("statusToVisualState", () => {
   });
 
   it("all outputs are valid CityVisualState values", () => {
-    const valid: CityVisualState[] = ["idle", "planning", "working", "awaiting_approval", "awaiting_input", "dimmed"];
+    const valid: CityVisualState[] = ["idle", "planning", "working", "awaiting_approval", "awaiting_input", "paused", "dimmed"];
     for (const status of ["active", "disabled", "archived"] as HouseStatus[]) {
       for (const runtime of RUNTIME_STATUSES) {
         expect(valid).toContain(statusToVisualState({ status, runtimeStatus: runtime }));

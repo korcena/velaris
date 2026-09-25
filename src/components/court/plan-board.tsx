@@ -115,6 +115,11 @@ export function PlanBoard({ parentTaskId, refreshKey }: { parentTaskId: string |
           <span>
             Cost: <span className="font-mono">${cost.total.toLocaleString(undefined, { minimumFractionDigits: 4 })}</span>{" "}
             · {cost.inputTokens + cost.outputTokens} tokens
+            {cost.estimated ? (
+              <Badge variant="outline" className="ml-1 bg-velaris-gold/10 text-velaris-gold">
+                estimated
+              </Badge>
+            ) : null}
           </span>
         </div>
       </CardHeader>
