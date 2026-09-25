@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Sparkles, Castle, Map as MapIcon, ScrollText, Bird, Crown } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
+import { UsagePanel } from "@/components/dashboard/usage-panel";
+import { MonitoringPanel } from "@/components/dashboard/monitoring-panel";
 
 export default function HomePage() {
   return (
@@ -43,6 +45,13 @@ export default function HomePage() {
           <QuickLink href="/high-lord" icon={Crown} title="High Lord's Court" subtitle="Orchestration — arriving in Phase 4." />
           <QuickLink href="/roost" icon={Bird} title="Messenger Roost" subtitle="Answer your houses' messenger birds." />
         </div>
+      </section>
+
+      {/* Phase 6 E/F — monitoring + usage live on the root dashboard (Q7),
+          avoiding a 10th NAV_SECTIONS entry. */}
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <MonitoringPanel />
+        <UsagePanel />
       </section>
 
       <section className="rounded-2xl border border-border bg-card/30 p-6">

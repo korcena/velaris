@@ -23,6 +23,7 @@ import { migrate } from "@/lib/db/migrate";
 import { closeDb, getRawDb, getDb } from "@/lib/db";
 import { seedDefaultProviderConfigs } from "@/server/repositories/provider-config-repo";
 import { seedHighLordHouse } from "@/server/repositories/house-repo";
+import { seedDefaultTemplates } from "@/server/repositories/template-repo";
 import { OpencodeClient } from "@/server/opencode";
 import { OllamaClient } from "@/server/execution/ollama/client";
 import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
@@ -71,6 +72,8 @@ async function main(): Promise<void> {
   const seeded = seedDefaultProviderConfigs(raw);
   // Seed the singleton High Lord house (idempotent; never clobbers user edits).
   seedHighLordHouse(raw);
+  // Seed the default house/project templates (idempotent by (kind,name)).
+  seedDefaultTemplates(raw);
   const db = getDb();
 
   // 3. Heartbeat row so /api/health can report engine liveness.

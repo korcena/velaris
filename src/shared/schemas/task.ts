@@ -25,6 +25,8 @@ const taskBase = z.object({
 export const taskCreateSchema = taskBase.extend({
   houseId: uuidSchema.optional().nullable().default(null),
   projectId: uuidSchema.optional().nullable().default(null),
+  /** Phase 6 Stage B: optional target agent (must belong to houseId — checked at the route). */
+  agentId: uuidSchema.optional().nullable().default(null),
   workingDirectory: z.string().trim().optional().nullable().default(null),
   executionPreferences: z.record(z.string(), z.unknown()).optional().default({}),
 });
@@ -38,6 +40,7 @@ export const taskUpdateSchema = z.object({
   priority: z.enum(TASK_PRIORITY_TUPLE).optional(),
   houseId: uuidSchema.optional().nullable(),
   projectId: uuidSchema.optional().nullable(),
+  agentId: uuidSchema.optional().nullable(),
   workingDirectory: z.string().trim().optional().nullable(),
   executionPreferences: z.record(z.string(), z.unknown()).optional(),
   // Phase 1: status may only be set to "cancelled" (nothing else executes).

@@ -17,8 +17,8 @@ import { executeTask } from "@/server/execution/runner";
 import { runOllamaTask } from "@/server/execution/ollama/runtime";
 import { OpencodeClient } from "@/server/opencode";
 import { OllamaClient } from "@/server/execution/ollama/client";
-import type { HouseDto, TaskDto } from "@/shared/types";
-import { getHouse } from "@/server/repositories/house-repo";
+import type { HouseConfiguration, HouseDto, TaskDto } from "@/shared/types";
+import { getHouse, resolveRuntimeAgent } from "@/server/repositories/house-repo";
 import { getTask } from "@/server/repositories/task-repo";
 import {
   listQueuedTaskIds,
@@ -29,7 +29,7 @@ import { createExecutionEvent, getActiveSessionForHouse } from "@/server/reposit
 import { resolveSafePath, isPathAllowed } from "@/lib/paths";
 import { runParent, tickActivePlans } from "./orchestrator";
 import type { OrchestratorDeps } from "./orchestrator";
-import { providerHealth, resolveProviderKind } from "./provider-factory";
+import { providerHealth, resolveProviderKindForAgent } from "./provider-factory";
 
 export interface QueueDeps {
   db: VelarisDb;
@@ -107,7 +107,11 @@ export class TaskQueue {
       } else {
         const house = getHouse(db, task.houseId);
         if (house) {
-          const kind = resolveProviderKind(house);
+          // Phase 6 Stage B: gate on the ROUTED agent's provider. With no
+          // explicit task.agentId the default agent's config === house config,
+          // so this is identical to the pre-multi-agent gate.
+          const runtimeAgent = resolveRuntimeAgent(db, house.id, task);
+          const kind = resolveProviderKindForAgent(runtimeAgent, house);
           if (healthCache.get(kind) === false) {
             this.deps.log(`[queue] ${kind} provider not healthy — leaving ${taskId} queued`);
             continue;
@@ -203,7 +207,16 @@ export class TaskQueue {
 
       // Workspace safety: resolve + allowlist. resolveWorkspace sets the task
       // to failed/queued itself when it cannot run.
-      const resolvedDir = this.resolveWorkspace(db, task, house);
+      //
+      // Phase 6 Stage B: an explicitly targeted agent (task.agentId) drives the
+      // run's configuration; when null the house configuration is used exactly
+      // as before (byte-identical single-agent path). The default agent's config
+      // IS the house configuration, so both agree for single-agent houses.
+      const runtimeAgent = task.agentId ? resolveRuntimeAgent(db, house.id, task) : null;
+      const runtimeConfig = runtimeAgent?.configuration ?? house.configuration;
+      const runtimeAgentId = runtimeAgent?.id ?? null;
+
+      const resolvedDir = this.resolveWorkspace(db, task, house, runtimeConfig);
       if (!resolvedDir) return;
 
       this.deps.log(`[queue] running task ${task.title} for house ${house.name} in ${resolvedDir}`);
@@ -211,7 +224,7 @@ export class TaskQueue {
       // Provider dispatch: OpenCode routes through the existing runner; Ollama
       // routes to the native tool-loop runtime (Stage F). The OpenCode branch
       // here is byte-identical to the pre-seam code.
-      const provider = resolveProviderKind(house);
+      const provider: ProviderKind = runtimeConfig.executionProvider;
       if (provider === "ollama") {
         if (!this.deps.ollamaClient) {
           this.deps.log(`[queue] task ${task.title} for house ${house.name}: no Ollama client configured`);
@@ -233,8 +246,9 @@ export class TaskQueue {
             ollama: this.deps.ollamaClient,
             task,
             house,
+            agent: runtimeAgent,
             directory: resolvedDir,
-            modelId: house.configuration.modelId,
+            modelId: runtimeConfig.modelId,
           },
           { signal },
         );
@@ -251,8 +265,10 @@ export class TaskQueue {
           client,
           task,
           house,
+          agent: runtimeAgent,
+          agentId: runtimeAgentId,
           directory: resolvedDir,
-          modelId: house.configuration.modelId,
+          modelId: runtimeConfig.modelId,
         },
         { signal },
       );
@@ -264,23 +280,29 @@ export class TaskQueue {
     }
   }
 
-  /** Resolve + validate the working directory against the house allowlist.
+  /** Resolve + validate the working directory against the ROUTED agent's
+   * allowlist (defaults to the house configuration for single-agent houses).
    * Returns the real path, or null (with the task set to a state indicating block).
    */
-  private resolveWorkspace(db: VelarisDb, task: TaskDto, house: HouseDto): string | null {
+  private resolveWorkspace(
+    db: VelarisDb,
+    task: TaskDto,
+    house: HouseDto,
+    configuration: HouseConfiguration = house.configuration,
+  ): string | null {
     const dir = task.workingDirectory;
     if (!dir) {
-      // If the working directory is missing, try the house's first allowlist entry.
-      const fallback = house.configuration.workspaceAllowlist[0];
-      if (fallback && isPathAllowed(fallback, house.configuration.workspaceAllowlist)) {
-        return resolveSafePath(fallback, house.configuration.workspaceAllowlist);
+      // If the working directory is missing, try the agent's first allowlist entry.
+      const fallback = configuration.workspaceAllowlist[0];
+      if (fallback && isPathAllowed(fallback, configuration.workspaceAllowlist)) {
+        return resolveSafePath(fallback, configuration.workspaceAllowlist);
       }
       this.deps.log(`[queue] task ${task.title}: no working_directory and no valid allowlist entry`);
       setTaskStatus(db, task.id, "failed", "No working directory and no allowlist entry");
       return null;
     }
 
-    if (house.configuration.workspaceAllowlist.length === 0) {
+    if (configuration.workspaceAllowlist.length === 0) {
       // Plan §6 P2 enforcement: no allowlist → require approval before ANY execution.
       // We surface this as a blocked task + notification; the runner won't start.
       this.deps.log(`[queue] task ${task.title}: house has no workspace allowlist — blocked`);
@@ -296,7 +318,7 @@ export class TaskQueue {
     }
 
     try {
-      return resolveSafePath(dir, house.configuration.workspaceAllowlist);
+      return resolveSafePath(dir, configuration.workspaceAllowlist);
     } catch (err) {
       this.deps.log(`[queue] task ${task.title}: path outside allowlist — ${err instanceof Error ? err.message : String(err)}`);
       setTaskStatus(db, task.id, "failed", `working_directory outside house allowlist: ${err instanceof Error ? err.message : String(err)}`);

@@ -59,11 +59,13 @@ import {
 } from "@/server/repositories/task-repo";
 import {
   createExecutionSession,
+  getExecutionSession,
   createAgentMessage,
   upsertAgentMessage,
   listAgentMessagesForSession,
 } from "@/server/repositories/execution-repo";
-import { agentMessages } from "@/lib/db/schema";
+import { agentMessages, agents } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 let tmpDir: string;
 let dbPath: string;
@@ -638,6 +640,39 @@ describe("agent_messages tool-loop columns", () => {
     });
     return { sessionId: session.id, houseId: h.id };
   }
+
+  it("round-trips execution_sessions.agent_id (Phase 6 Stage B)", () => {
+    const db = getDb();
+    const house = createHouse(db, { ...houseInput, name: "Agent house" });
+    const agent = db
+      .select()
+      .from(agents)
+      .where(eq(agents.houseId, house.id))
+      .get()!;
+    const task = createTask(db, { title: "T", houseId: house.id });
+
+    // Null by default — the pre-multi-agent shape.
+    const nullSession = createExecutionSession(db, {
+      taskId: task.id,
+      houseId: house.id,
+      provider: "opencode",
+      modelId: "glm-5.3",
+    });
+    expect(nullSession.agentId).toBeNull();
+
+    // Populated when a routed agent is supplied.
+    const routed = createExecutionSession(db, {
+      taskId: task.id,
+      houseId: house.id,
+      agentId: agent.id,
+      provider: "opencode",
+      modelId: "glm-5.3",
+    });
+    expect(routed.agentId).toBe(agent.id);
+    // And it is persisted, not just echoed on the insert.
+    const reread = getExecutionSession(db, routed.id);
+    expect(reread?.agentId).toBe(agent.id);
+  });
 
   it("round-trips a role='tool' message with toolCallId (upsertAgentMessage)", () => {
     const { sessionId } = seedSession();

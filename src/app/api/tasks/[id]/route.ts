@@ -9,6 +9,7 @@ import {
   InvalidTaskStatusTransitionError,
 } from "@/server/repositories/task-repo";
 import { getSubtaskByChildTaskId, listSubtasksForParent } from "@/server/repositories/subtask-repo";
+import { agentBelongsToHouse } from "@/server/repositories/house-repo";
 import { taskUpdateSchema } from "@/shared/schemas/task";
 import { ok, noContent, notFound, badRequest, badTransition, routeErrorOrMapped } from "@/server/api-helpers";
 
@@ -51,6 +52,30 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       }
     }
 
+    // Phase 6 Stage B: an explicit target agent must belong to the task's
+    // (possibly newly PATCHed) house.
+    let effectiveAgentId: string | null | undefined = parsed.agentId;
+    if (parsed.agentId) {
+      const current = getTask(getDb(), id);
+      if (!current) return notFound(`Task not found: ${id}`);
+      const effectiveHouseId = parsed.houseId !== undefined ? parsed.houseId : current.houseId;
+      if (!effectiveHouseId || !agentBelongsToHouse(getDb(), parsed.agentId, effectiveHouseId)) {
+        return badRequest("agentId does not belong to the selected house");
+      }
+    } else if (parsed.houseId !== undefined) {
+      // Moving the task to another house without naming an agent must not leave
+      // the OLD house's agentId attached (it would target a foreign agent).
+      // Validate the existing target against the new house; clear it if foreign.
+      const current = getTask(getDb(), id);
+      if (!current) return notFound(`Task not found: ${id}`);
+      if (
+        current.agentId &&
+        (!parsed.houseId || !agentBelongsToHouse(getDb(), current.agentId, parsed.houseId))
+      ) {
+        effectiveAgentId = null;
+      }
+    }
+
     const task = updateTask(getDb(), id, {
       title: parsed.title,
       description: parsed.description,
@@ -58,6 +83,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       priority: parsed.priority,
       houseId: parsed.houseId,
       projectId: parsed.projectId,
+      agentId: effectiveAgentId,
       workingDirectory: parsed.workingDirectory,
       executionPreferences: parsed.executionPreferences,
       status: parsed.status,

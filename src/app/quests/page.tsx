@@ -70,6 +70,7 @@ export default function QuestBoardPage() {
       priority: "medium",
       houseId: null,
       projectId: null,
+      agentId: null,
       workingDirectory: null,
     },
   });
@@ -82,6 +83,21 @@ export default function QuestBoardPage() {
     setValue,
     formState: { errors },
   } = form;
+
+  const selectedHouseId = watch("houseId");
+  const selectedProject = watch("projectId");
+  const selectedAgentId = watch("agentId");
+  // Agents available for the selected house (oldest-first; index 0 is default).
+  const selectedHouse = houses.find((h) => h.id === selectedHouseId);
+  const availableAgents = selectedHouse?.agents ?? [];
+
+  // When the house changes, clear any agent target that no longer belongs.
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    if (!availableAgents.some((a) => a.id === selectedAgentId)) {
+      setValue("agentId", null);
+    }
+  }, [selectedHouseId, selectedAgentId, availableAgents, setValue]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,8 +146,6 @@ export default function QuestBoardPage() {
       setBusyId(null);
     }
   }
-
-  const selectedProject = watch("projectId");
 
   async function onSubmit(values: TaskFormValues) {
     setSaving(true);
@@ -200,6 +214,13 @@ export default function QuestBoardPage() {
                     key={task.id}
                     task={task}
                     houseName={houses.find((h) => h.id === task.houseId)?.name ?? "—"}
+                    agentName={
+                      task.agentId
+                        ? houses
+                            .flatMap((h) => h.agents ?? [])
+                            .find((a) => a.id === task.agentId)?.name ?? "—"
+                        : "default"
+                    }
                     activityOpen={activityOpen === task.id}
                     events={eventsByTask[task.id] ?? null}
                     busy={busyId === task.id}
@@ -286,7 +307,7 @@ export default function QuestBoardPage() {
                   value={watch("houseId") ?? ""}
                   onValueChange={(v) => setValue("houseId", v || null)}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" data-testid="house-select">
                     <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
@@ -300,6 +321,33 @@ export default function QuestBoardPage() {
                 </Select>
               </div>
             </div>
+
+            {availableAgents.length > 1 ? (
+              <div className="space-y-2">
+                <Label>Assigned agent (optional)</Label>
+                <Select
+                  value={selectedAgentId ?? "__default__"}
+                  onValueChange={(v) => setValue("agentId", v === "__default__" ? null : v)}
+                >
+                  <SelectTrigger className="w-full" data-testid="agent-select">
+                    <SelectValue placeholder="House default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">
+                      House default ({availableAgents[0]?.name})
+                    </SelectItem>
+                    {availableAgents.slice(1).map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name} · {a.role}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Target a specific agent. The house default is used when left unset.
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -351,6 +399,7 @@ export default function QuestBoardPage() {
 function FragmentRow({
   task,
   houseName,
+  agentName,
   activityOpen,
   events,
   busy,
@@ -359,6 +408,7 @@ function FragmentRow({
 }: {
   task: TaskDto;
   houseName: string;
+  agentName: string;
   activityOpen: boolean;
   events: ExecutionEventDto[] | null;
   busy: boolean;
@@ -370,6 +420,7 @@ function FragmentRow({
     <FragmentRowContent
       task={task}
       houseName={houseName}
+      agentName={agentName}
       activityOpen={activityOpen}
       events={events}
       busy={busy}
@@ -383,6 +434,7 @@ function FragmentRow({
 function FragmentRowContent({
   task,
   houseName,
+  agentName,
   activityOpen,
   events,
   busy,
@@ -392,6 +444,7 @@ function FragmentRowContent({
 }: {
   task: TaskDto;
   houseName: string;
+  agentName: string;
   activityOpen: boolean;
   events: ExecutionEventDto[] | null;
   busy: boolean;
@@ -410,7 +463,12 @@ function FragmentRowContent({
         <TableCell>
           <TaskStatusBadge status={task.status} />
         </TableCell>
-        <TableCell className="text-muted-foreground">{houseName}</TableCell>
+        <TableCell className="text-muted-foreground">
+          <span>{houseName}</span>
+          {task.agentId ? (
+            <span className="ml-2 text-xs text-velaris-purple">{agentName}</span>
+          ) : null}
+        </TableCell>
         <TableCell>
           <Button variant="ghost" size="sm" onClick={onToggleActivity} aria-expanded={activityOpen}>
             <Activity className="mr-1 h-3.5 w-3.5" />

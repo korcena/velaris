@@ -8,6 +8,7 @@ import {
   ProjectDirectoryInvalidError,
 } from "@/server/repositories/project-repo";
 import { projectCreateSchema } from "@/shared/schemas/project";
+import { recordAudit } from "@/server/repositories/audit-repo";
 import { created, ok, conflict, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,13 @@ export async function POST(req: NextRequest) {
       directory: parsed.directory,
       defaultModel: parsed.defaultModel,
       instructions: parsed.instructions,
+    });
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "create",
+      entityType: "project",
+      entityId: project.id,
+      metadata: { name: project.name, directory: project.directory },
     });
     return created({ project });
   } catch (err) {

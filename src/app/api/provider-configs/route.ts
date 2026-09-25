@@ -6,6 +6,7 @@ import {
   createProviderConfig,
 } from "@/server/repositories/provider-config-repo";
 import { providerConfigCreateSchema } from "@/shared/schemas/provider-config";
+import { recordAudit } from "@/server/repositories/audit-repo";
 import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,13 @@ export async function POST(req: NextRequest) {
       baseUrl: parsed.baseUrl,
       isDefault: parsed.isDefault,
       extra: parsed.extra,
+    });
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "create",
+      entityType: "provider_config",
+      entityId: config.id,
+      metadata: { name: config.name, type: config.type, isDefault: config.isDefault },
     });
     return created({ providerConfig: config });
   } catch (err) {

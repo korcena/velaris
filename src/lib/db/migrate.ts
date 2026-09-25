@@ -22,6 +22,13 @@
  * `PRAGMA foreign_key_check` as a safety net. This is the general guarantee and
  * covers every rebuild migration (including 0001, which has the same latent
  * OFF/ON pattern that was previously a no-op under drizzle).
+ *
+ * Phase 6 note: migrations 0005 (audit_log) and 0006 are ADDITIVE ONLY
+ * (CREATE TABLE / ALTER TABLE ADD COLUMN) and intentionally emit NO in-file
+ * `PRAGMA foreign_keys` toggle — such toggles are no-ops inside the migrator's
+ * single transaction. If a future migration must rebuild a CHECK-constrained
+ * table, rely on the FK-off guard here and add a regression test; do not add a
+ * PRAGMA to the .sql file.
  */
 
 import fs from "node:fs";

@@ -94,6 +94,11 @@ export function HouseCard({
             <span>
               <span className="font-medium text-foreground">{house.agent.name || "Unnamed"}</span>
               {house.agent.role ? <span className="text-muted-foreground"> · {house.agent.role}</span> : null}
+              {(house.agents?.length ?? 0) > 1 ? (
+                <Badge variant="outline" className="ml-2 align-middle">
+                  +{(house.agents?.length ?? 1) - 1} agent{(house.agents?.length ?? 1) - 1 !== 1 ? "s" : ""}
+                </Badge>
+              ) : null}
             </span>
           </div>
           <div className="flex items-center gap-2 text-muted-foreground">

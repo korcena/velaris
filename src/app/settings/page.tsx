@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/api-client";
+import { AuditLogCard } from "@/components/settings/audit-log-card";
+import { TemplateManagerCard } from "@/components/settings/template-manager-card";
 import { DEFAULT_TASK_TYPES } from "@/shared/constants";
 import type { ProviderConfigDto, ProviderConfigType } from "@/shared/types";
 import type { StoredTaskTypes } from "@/shared/types";
@@ -477,6 +479,12 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Phase 6 — Audit log (Stage A): read-only user-action trail */}
+      <AuditLogCard />
+
+      {/* Phase 6 — Templates (Stage C): seeded + user-created blueprints */}
+      <TemplateManagerCard />
 
       {/* Task types */}
       <Card>

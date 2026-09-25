@@ -14,6 +14,8 @@ import {
   houseCreateSchema,
   houseUpdateSchema,
   houseStatusTransitionSchema,
+  houseAgentCreateSchema,
+  houseAgentUpdateSchema,
   permissionsSchema,
   permissionModeSchema,
 } from "@/shared/schemas/house";
@@ -31,7 +33,34 @@ import {
   courtSteerSchema,
   planExecutionPreferencesSchema,
 } from "@/shared/schemas/plan";
-import { ORCHESTRATION_DEFAULTS, TASK_STATUSES, SESSION_STATUSES, AGENT_MESSAGE_ROLES } from "@/shared/constants";
+import {
+  ORCHESTRATION_DEFAULTS, TASK_STATUSES, SESSION_STATUSES, AGENT_MESSAGE_ROLES,
+  AUDIT_ACTORS, AUDIT_ENTITY_TYPES } from "@/shared/constants";
+import {
+  auditLogQuerySchema,
+  AUDIT_LOG_DEFAULT_LIMIT,
+  AUDIT_LOG_MAX_LIMIT,
+} from "@/shared/schemas/audit";
+import {
+  templateCreateSchema,
+  templateUpdateSchema,
+  templateListQuerySchema,
+  templateInstantiateSchema,
+} from "@/shared/schemas/template";
+import {
+  archiveQuerySchema,
+  ARCHIVE_DEFAULT_LIMIT,
+  ARCHIVE_MAX_LIMIT,
+  ARCHIVE_STATUSES,
+} from "@/shared/schemas/archive";
+import {
+  usageQuerySchema,
+  USAGE_BUCKETS,
+  USAGE_DEFAULT_BUCKET,
+  USAGE_DEFAULT_TASK_LIMIT,
+  USAGE_MAX_TASK_LIMIT,
+} from "@/shared/schemas/usage";
+import { TEMPLATE_KINDS, DEFAULT_TEMPLATES } from "@/shared/constants";
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -329,6 +358,58 @@ describe("houseStatusTransitionSchema", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* House agents — Phase 6 Stage B                                      */
+/* ------------------------------------------------------------------ */
+
+describe("houseAgentCreateSchema / houseAgentUpdateSchema", () => {
+  const valid = {
+    name: "Cassian",
+    role: "General · commander",
+    configuration: {
+      systemPrompt: "You are Cassian.",
+      executionProvider: "opencode" as const,
+      aiProvider: "ollama-cloud",
+      modelId: "glm-5.3",
+      workspaceAllowlist: ["/tmp"],
+      tools: ["fs"],
+      permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+      approvalPolicy: "always" as const,
+      concurrency: 1,
+    },
+  };
+
+  it("parses a valid create payload", () => {
+    const out = houseAgentCreateSchema.parse(valid);
+    expect(out.name).toBe("Cassian");
+    expect(out.role).toBe("General · commander");
+    expect(out.configuration.modelId).toBe("glm-5.3");
+  });
+
+  it("rejects a missing name/role", () => {
+    expect(() => houseAgentCreateSchema.parse({ configuration: valid.configuration })).toThrow();
+    expect(() => houseAgentCreateSchema.parse({ name: "X", configuration: valid.configuration })).toThrow();
+  });
+
+  it("rejects smuggled top-level keys (strict) such as houseId", () => {
+    expect(() =>
+      houseAgentCreateSchema.parse({
+        ...valid,
+        houseId: "11111111-1111-1111-1111-111111111111",
+      }),
+    ).toThrow();
+  });
+
+  it("update schema is partial and strict", () => {
+    expect(houseAgentUpdateSchema.parse({}).name).toBeUndefined();
+    expect(houseAgentUpdateSchema.parse({ role: "Commander" }).role).toBe("Commander");
+    expect(houseAgentUpdateSchema.parse({ configuration: { modelId: "m2" } }).configuration).toEqual({
+      modelId: "m2",
+    });
+    expect(() => houseAgentUpdateSchema.parse({ bogus: true })).toThrow();
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Permissions schema                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -467,8 +548,15 @@ describe("taskCreateSchema", () => {
     expect(out.priority).toBe("medium");
     expect(out.houseId).toBeNull();
     expect(out.projectId).toBeNull();
+    expect(out.agentId).toBeNull();
     expect(out.workingDirectory).toBeNull();
     expect(out.executionPreferences).toEqual({});
+  });
+
+  it("accepts an optional UUID agentId and rejects a non-uuid", () => {
+    const uuid = "11111111-1111-1111-1111-111111111111";
+    expect(taskCreateSchema.parse({ title: "T", agentId: uuid }).agentId).toBe(uuid);
+    expect(() => taskCreateSchema.parse({ title: "T", agentId: "not-a-uuid" })).toThrow(/UUID/);
   });
 
   it("accepts an arbitrary extensible type (not a closed enum)", () => {
@@ -712,5 +800,256 @@ describe("Phase 5 status/role parity", () => {
 
   it("AGENT_MESSAGE_ROLES includes 'tool'", () => {
     expect([...AGENT_MESSAGE_ROLES]).toEqual(["user", "agent", "tool"]);
+  });
+});
+
+/* ================================================================== */
+/* Phase 6 — audit constants + query schema (decision Q9)              */
+/* ================================================================== */
+
+describe("audit constants", () => {
+  it("AUDIT_ACTORS mirrors the ck_audit_actor CHECK", () => {
+    expect([...AUDIT_ACTORS]).toEqual(["user", "engine"]);
+  });
+
+  it("AUDIT_ENTITY_TYPES lists the known extensible entity set", () => {
+    expect(AUDIT_ENTITY_TYPES).toContain("house");
+    expect(AUDIT_ENTITY_TYPES).toContain("approval");
+    expect(AUDIT_ENTITY_TYPES).toContain("provider_config");
+    expect(AUDIT_ENTITY_TYPES).toContain("template");
+  });
+
+  it("AUDIT_ENTITY_TYPES omits 'task' (no task CRUD is audited; m5)", () => {
+    // Q9 scoped audit to web user-action rows; task lifecycle lives in
+    // execution_events, so a 'task' filter option could never return rows.
+    expect(AUDIT_ENTITY_TYPES).not.toContain("task");
+  });
+});
+
+describe("auditLogQuerySchema", () => {
+  it("coerces numeric query params and defaults optional filters", () => {
+    const out = auditLogQuerySchema.parse({});
+    expect(out.limit).toBeUndefined();
+    expect(out.offset).toBeUndefined();
+    expect(out.actor).toBeUndefined();
+    expect(AUDIT_LOG_DEFAULT_LIMIT).toBe(25);
+    expect(AUDIT_LOG_MAX_LIMIT).toBe(100);
+  });
+
+  it("accepts valid filters and coerces limit/offset from strings", () => {
+    const out = auditLogQuerySchema.parse({
+      limit: "10",
+      offset: "5",
+      actor: "user",
+      entityType: "house",
+      entityId: "h1",
+      action: "create",
+    });
+    expect(out).toEqual({
+      limit: 10,
+      offset: 5,
+      actor: "user",
+      entityType: "house",
+      entityId: "h1",
+      action: "create",
+    });
+  });
+
+  it("rejects unknown actor/entityType and out-of-range limits", () => {
+    expect(() => auditLogQuerySchema.parse({ actor: "robot" })).toThrow();
+    expect(() => auditLogQuerySchema.parse({ entityType: "spaceship" })).toThrow();
+    expect(() => auditLogQuerySchema.parse({ limit: "0" })).toThrow();
+    expect(() => auditLogQuerySchema.parse({ limit: String(AUDIT_LOG_MAX_LIMIT + 1) })).toThrow();
+    expect(() => auditLogQuerySchema.parse({ limit: "nope" })).toThrow();
+  });
+});
+
+/* ================================================================== */
+/* Phase 6 Stage C — template schemas                                  */
+/* ================================================================== */
+
+const validHouseTemplatePayload = {
+  description: "A house template",
+  agent: { name: "Templar", role: "Knight" },
+  configuration: {
+    systemPrompt: "You are a templar.",
+    executionProvider: "opencode" as const,
+    aiProvider: "ollama-cloud",
+    modelId: "glm-5.3",
+    workspaceAllowlist: ["/tmp"],
+    tools: ["fs"],
+    permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+    approvalPolicy: "always" as const,
+    concurrency: 1,
+  },
+};
+
+const validProjectTemplatePayload = {
+  description: "A repo template",
+  defaultModel: "glm-5.3",
+  instructions: "Read the conventions.",
+};
+
+describe("template schemas (Phase 6 Stage C)", () => {
+  it("TEMPLATE_KINDS + DEFAULT_TEMPLATES have house/project parity", () => {
+    expect([...TEMPLATE_KINDS]).toEqual(["house", "project"]);
+    expect(DEFAULT_TEMPLATES.length).toBeGreaterThan(0);
+    expect(DEFAULT_TEMPLATES.some((t) => t.kind === "house")).toBe(true);
+    expect(DEFAULT_TEMPLATES.some((t) => t.kind === "project")).toBe(true);
+  });
+
+  it("parses a house template create (no name in payload) and a project one", () => {
+    const house = templateCreateSchema.parse({
+      kind: "house",
+      name: "H",
+      description: "d",
+      payload: validHouseTemplatePayload,
+    });
+    expect(house.kind).toBe("house");
+    if (house.kind === "house") {
+      expect(house.payload.agent.name).toBe("Templar");
+      // name is not part of the payload (instantiation-supplied).
+      expect("name" in house.payload).toBe(false);
+    }
+
+    const project = templateCreateSchema.parse({
+      kind: "project",
+      name: "P",
+      payload: validProjectTemplatePayload,
+    });
+    expect(project.kind).toBe("project");
+    if (project.kind === "project") {
+      expect(project.payload.defaultModel).toBe("glm-5.3");
+    }
+  });
+
+  it("rejects a kind/payload mismatch and smuggled keys (.strict())", () => {
+    expect(() =>
+      templateCreateSchema.parse({
+        kind: "house",
+        name: "H",
+        payload: validProjectTemplatePayload,
+      }),
+    ).toThrow();
+    expect(() =>
+      templateCreateSchema.parse({
+        kind: "house",
+        name: "H",
+        payload: validHouseTemplatePayload,
+        isSeeded: true,
+      }),
+    ).toThrow();
+  });
+
+  it("update schema is partial + strict; list query validates kind", () => {
+    expect(templateUpdateSchema.parse({}).name).toBeUndefined();
+    expect(templateUpdateSchema.parse({ name: "Renamed" }).name).toBe("Renamed");
+    expect(() => templateUpdateSchema.parse({ bogus: 1 })).toThrow();
+    expect(templateListQuerySchema.parse({ kind: "project" }).kind).toBe("project");
+    expect(() => templateListQuerySchema.parse({ kind: "spaceship" })).toThrow();
+  });
+
+  it("instantiate schema accepts optional name/agentName/directory and rejects junk", () => {
+    const out = templateInstantiateSchema.parse({
+      name: "X",
+      agentName: "Y",
+      directory: "/tmp",
+    });
+    expect(out).toEqual({ name: "X", agentName: "Y", directory: "/tmp" });
+    expect(templateInstantiateSchema.parse({})).toEqual({});
+    expect(() => templateInstantiateSchema.parse({ bogus: true })).toThrow();
+  });
+});
+
+/* ================================================================== */
+/* Phase 6 Stage D — archive query schema                              */
+/* ================================================================== */
+
+describe("archiveQuerySchema (Phase 6 Stage D)", () => {
+  it("coerces pagination and defaults to 25/100 constants", () => {
+    const out = archiveQuerySchema.parse({});
+    expect(out.limit).toBeUndefined();
+    expect(out.offset).toBeUndefined();
+    expect(ARCHIVE_DEFAULT_LIMIT).toBe(25);
+    expect(ARCHIVE_MAX_LIMIT).toBe(100);
+    expect([...ARCHIVE_STATUSES]).toEqual(["completed", "failed", "cancelled", "interrupted"]);
+  });
+
+  it("accepts valid filters and coerces numeric strings", () => {
+    const out = archiveQuerySchema.parse({
+      q: "needle",
+      houseId: "h1",
+      status: "completed",
+      type: "research",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-02-01T00:00:00.000Z",
+      limit: "10",
+      offset: "5",
+    });
+    expect(out).toEqual({
+      q: "needle",
+      houseId: "h1",
+      status: "completed",
+      type: "research",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-02-01T00:00:00.000Z",
+      limit: 10,
+      offset: 5,
+    });
+  });
+
+  it("rejects a non-terminal status and out-of-range limits", () => {
+    expect(() => archiveQuerySchema.parse({ status: "running" })).toThrow();
+    expect(() => archiveQuerySchema.parse({ status: "queued" })).toThrow();
+    expect(() => archiveQuerySchema.parse({ limit: "0" })).toThrow();
+    expect(() => archiveQuerySchema.parse({ limit: String(ARCHIVE_MAX_LIMIT + 1) })).toThrow();
+    expect(() => archiveQuerySchema.parse({ offset: "-1" })).toThrow();
+    expect(() => archiveQuerySchema.parse({ limit: "nope" })).toThrow();
+  });
+});
+/* ------------------------------------------------------------------ */
+/* usageQuerySchema (Phase 6 Stage E)                                  */
+/* ------------------------------------------------------------------ */
+
+describe("usageQuerySchema (Phase 6 Stage E)", () => {
+  it("defaults: all filters optional, bucket/taskLimit unset (service applies them)", () => {
+    const out = usageQuerySchema.parse({});
+    expect(out.bucket).toBeUndefined();
+    expect(out.taskLimit).toBeUndefined();
+    expect(USAGE_DEFAULT_BUCKET).toBe("day");
+    expect(USAGE_DEFAULT_TASK_LIMIT).toBe(10);
+    expect(USAGE_MAX_TASK_LIMIT).toBe(50);
+    expect([...USAGE_BUCKETS]).toEqual(["day", "hour"]);
+  });
+
+  it("accepts valid filters and coerces taskLimit", () => {
+    const out = usageQuerySchema.parse({
+      houseId: "h1",
+      taskId: "t1",
+      modelId: "glm-5.3",
+      provider: "opencode",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-02-01T00:00:00.000Z",
+      bucket: "hour",
+      taskLimit: "25",
+    });
+    expect(out).toEqual({
+      houseId: "h1",
+      taskId: "t1",
+      modelId: "glm-5.3",
+      provider: "opencode",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-02-01T00:00:00.000Z",
+      bucket: "hour",
+      taskLimit: 25,
+    });
+  });
+
+  it("rejects an invalid bucket and out-of-range taskLimit", () => {
+    expect(() => usageQuerySchema.parse({ bucket: "week" })).toThrow();
+    expect(() => usageQuerySchema.parse({ taskLimit: "0" })).toThrow();
+    expect(() => usageQuerySchema.parse({ taskLimit: String(USAGE_MAX_TASK_LIMIT + 1) })).toThrow();
+    expect(() => usageQuerySchema.parse({ taskLimit: "nope" })).toThrow();
+    expect(() => usageQuerySchema.parse({ houseId: "" })).toThrow();
   });
 });

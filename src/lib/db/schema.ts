@@ -70,7 +70,7 @@ export const agents = sqliteTable(
 );
 
 /* ------------------------------------------------------------------ */
-/* agent_configurations (1:1 with an agent in Phase 1)                */
+/* agent_configurations (1 config per agent)                          */
 /* ------------------------------------------------------------------ */
 
 export const agentConfigurations = sqliteTable(
@@ -94,7 +94,10 @@ export const agentConfigurations = sqliteTable(
     updatedAt: text("updated_at").notNull().default(now()),
   },
   (t) => [
-    // 1:1 with the agent in MVP (Phase 6 multi-agent drops this).
+    // ONE configuration per agent (Phase 6 keeps this). A house may own many
+    // agents (agents.house_id is 1:N); each agent owns exactly one config, so
+    // multiple configuration rows do NOT require dropping this index. The old
+    // "Phase 6 multi-agent drops this" comment was inaccurate.
     uniqueIndex("idx_agent_configurations_agent").on(t.agentId),
     index("idx_agent_configurations_agent_idx").on(t.agentId),
     check("ck_config_execution_provider", sql`execution_provider in ('opencode','ollama')`),
@@ -166,6 +169,14 @@ export const tasks = sqliteTable(
     status: text("status").notNull().default("queued"),
     houseId: text("house_id").references(() => houses.id, { onDelete: "set null" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    /**
+     * Phase 6 Stage B: optional target agent for this task. When null, the
+     * engine routes to the house's DEFAULT agent (the oldest agent), preserving
+     * the pre-multi-agent single-agent path byte-identically. ON DELETE SET NULL
+     * so deleting an agent never destroys task history; the task falls back to
+     * the house default on next routing.
+     */
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     workingDirectory: text("working_directory"),
     executionPreferences: text("execution_preferences").notNull().default("{}"),
     attachments: text("attachments").notNull().default("[]"),
@@ -176,6 +187,7 @@ export const tasks = sqliteTable(
     index("idx_tasks_house").on(t.houseId),
     index("idx_tasks_status").on(t.status),
     index("idx_tasks_project").on(t.projectId),
+    index("idx_tasks_agent").on(t.agentId),
     check("ck_tasks_title_len", sql`length(title) between 1 and 200`),
     check("ck_tasks_priority", sql`priority in ('low','medium','high','urgent')`),
     check(
@@ -511,6 +523,76 @@ export const handoffs = sqliteTable(
   ],
 );
 
+/* ------------------------------------------------------------------ */
+/* audit_log (Phase 6 Stage A)                                         */
+/* ------------------------------------------------------------------ */
+/*                                                                     */
+/* Append-only record of WEB USER-ACTION rows (house/agent/project/    */
+/* provider-config/template CRUD + approval responses). Engine         */
+/* execution lifecycle is deliberately NOT duplicated here — it lives  */
+/* in execution_events. `actor_agent_id` is optional attribution and   */
+/* survives agent deletion (SET NULL) so the log is retained.          */
+/*                                                                     */
+/* `action` / `entity_type` carry NO CHECK constraint (extensible; a   */
+/* new audited verb must never force a table rebuild). `actor` IS      */
+/* CHECK-constrained with AUDIT_ACTORS parity in shared constants.     */
+/* ------------------------------------------------------------------ */
+
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: text("id").primaryKey(),
+    actor: text("actor").notNull().default("user"), // 'user' | 'engine'
+    actorAgentId: text("actor_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+    action: text("action").notNull(), // 'create'|'update'|'delete'|'status'|'respond'|…
+    entityType: text("entity_type").notNull(), // 'house'|'project'|'provider_config'|'approval'|…
+    entityId: text("entity_id"),
+    metadata: text("metadata").notNull().default("{}"), // JSON (previously documented as `payload`)
+    createdAt: text("created_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_audit_created").on(t.createdAt),
+    index("idx_audit_entity").on(t.entityType, t.entityId),
+    check("ck_audit_actor", sql`actor in ('user','engine')`),
+  ],
+);
+
+/* ------------------------------------------------------------------ */
+/* templates (Phase 6 Stage C)                                         */
+/* ------------------------------------------------------------------ */
+/*                                                                     */
+/* Reusable house/project templates. The configuration lives in a JSON */
+/* `payload` text column so the shape can evolve without migrations    */
+/* (mirrors tasks.execution_preferences / provider_configs.extra),     */
+/* validated on write against the shared house/project zod schemas.    */
+/*                                                                     */
+/* Seeded defaults (`is_seeded=1`) are idempotent on boot by           */
+/* (kind,name) and immutable via the API; user-created rows are        */
+/* editable/deletable. `kind` is CHECK-constrained with TEMPLATE_KINDS */
+/* parity in shared constants.                                         */
+/* ------------------------------------------------------------------ */
+
+export const templates = sqliteTable(
+  "templates",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(), // 'house' | 'project'
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    payload: text("payload").notNull().default("{}"), // JSON (kind-specific shape)
+    isSeeded: integer("is_seeded", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull().default(now()),
+    updatedAt: text("updated_at").notNull().default(now()),
+  },
+  (t) => [
+    index("idx_templates_kind").on(t.kind),
+    uniqueIndex("idx_templates_name_kind").on(t.kind, t.name),
+    check("ck_templates_kind", sql`kind in ('house','project')`),
+  ],
+);
+
 /* ---------------------------------------------------------------- */
 /* Export row types                                                 */
 /* ---------------------------------------------------------------- */
@@ -561,3 +643,9 @@ export type SubtaskNew = typeof subtasks.$inferInsert;
 
 export type HandoffRow = typeof handoffs.$inferSelect;
 export type HandoffNew = typeof handoffs.$inferInsert;
+
+export type AuditLogRow = typeof auditLog.$inferSelect;
+export type AuditLogNew = typeof auditLog.$inferInsert;
+
+export type TemplateRow = typeof templates.$inferSelect;
+export type TemplateNew = typeof templates.$inferInsert;

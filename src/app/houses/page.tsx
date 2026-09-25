@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { HouseCard, type HouseCardData } from "@/components/houses/house-card";
 import { HouseForm } from "@/components/houses/house-form";
+import { TemplatePickerDialog } from "@/components/templates/template-picker-dialog";
 import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import type { HouseDto } from "@/shared/types";
@@ -33,6 +34,7 @@ export default function HousesPage() {
   // initializers, so without a remount a previously-opened house's values
   // would linger and silently overwrite the next target on save.
   const [formSession, setFormSession] = useState(0);
+  const [templateOpen, setTemplateOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<
     { house: HouseDto; action: "archive" | "delete" | "disable" | "enable" } | undefined
   >(undefined);
@@ -150,6 +152,9 @@ export default function HousesPage() {
             >
               {includeArchived ? "Showing archived" : "Show archived"}
             </Button>
+            <Button variant="outline" onClick={() => setTemplateOpen(true)} data-testid="new-from-template">
+              <Sparkles className="mr-2 h-4 w-4" /> New from template
+            </Button>
             <Button onClick={openCreate}>
               <Plus className="mr-2 h-4 w-4" /> New house
             </Button>
@@ -205,6 +210,18 @@ export default function HousesPage() {
         onOpenChange={setFormOpen}
         existing={editing}
         onSaved={handleSaved}
+      />
+
+      <TemplatePickerDialog
+        kind="house"
+        open={templateOpen}
+        onOpenChange={setTemplateOpen}
+        onInstantiated={(res) => {
+          if (res.house) {
+            void handleSaved(res.house);
+            toast.success(`'${res.house.name}' founded from a template`);
+          }
+        }}
       />
 
       <AlertDialog

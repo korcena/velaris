@@ -9,7 +9,7 @@ direct-Ollama tool loop for `executionProvider='ollama'` houses. Models are supp
 
 ## Status
 
-Phases 1–5 are implemented and tested:
+Phases 1–5 and Phase 6 part 1 (6.1) are implemented and tested:
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -19,7 +19,8 @@ Phases 1–5 are implemented and tested:
 | 3.1 — City Map | Full-screen Sims-like bird's-eye map at `/map`: houses as shaded castles, pan & zoom (wheel + buttons), outward-spiral placement, real-time status animations & celebrations | ✅ Done |
 | 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs, mid-plan steering, burning-castle abort | ✅ Done |
 | 5 — Ollama-Native Agent Runtime | Direct-Ollama provider + tool loop, permission-gated fs/shell/git tools, native pause/resume, estimated cost tracking, flag-gated worktree scaffold | ✅ Done |
-| 6 — Advanced Platform | Multi-agent houses, usage dashboards, templates, archives, monitoring | ⏳ Planned |
+| 6 — Advanced Platform (6.1) | Audit log, multi-agent houses, house/project templates, archives search, usage/cost dashboards, monitoring panel | ✅ Done |
+| 6.2 — Advanced Platform (deferred) | Real worktree isolation, FTS5 archives, per-agent cost rollups, audit retention/export | ⏳ Planned |
 
 See the [implementation plan](./docs/IMPLEMENTATION_PLAN.md) for the full phase breakdown
 and MVP acceptance journey.
@@ -52,6 +53,21 @@ and MVP acceptance journey.
 - **Inspect results** — each house has a workspace panel with live usage stats, a
   structured activity timeline, agent chat, and per-quest results including rendered diffs
   of the files the agent changed.
+- **Raise more than one banner** — a house can host several agents, each with its own
+  provider, model, prompt, allowlist, tools, permissions, approval policy, and concurrency.
+  Add agents from the house panel and point a quest at a specific one; single-agent houses
+  behave exactly as before.
+- **Build from templates** — conjure a fully configured house or project from a template:
+  seeded defaults ship ready to use (models, prompts, policies and all), and you can save
+  your own. Instantiate and edit normally; wrong-kind payloads are rejected, not silently
+  zeroed.
+- **Consult the archives** — search the city's history by text or house across past quests,
+  sessions, artifacts, and messages, with pagination over the full record.
+- **Read the ledgers** — usage and cost dashboards break spend down by house, model, and time,
+  separating provider-reported cost from estimated (Ollama) cost. The home dashboard also
+  shows engine health, queue depth, and error rate at a glance.
+- **Keep the chronicle** — Settings shows an audit log of user actions (houses, agents,
+  projects, provider configs, templates, and approval responses).
 
 ## Setup
 
@@ -120,10 +136,14 @@ stream with backoff reconnect and boot-time reconciliation of orphaned sessions.
 
 - **Unit/integration (Vitest)** — schemas, repositories, the execution status machine,
   OpenCode event mapping, queue/reconcile logic, the Ollama tool loop, permission gating
-  (path-escape/shell guards), the provider seam, migration data-preservation, pause/resume,
-  city-map camera/layout/palette logic, diff parsing. Integration tests invoke API route
-  handlers directly against a temp database.
+  (path-escape/shell guards), the provider seam, migration data-preservation (including the
+  Phase-1-head migration-chain safety test and seeded-real-DB guard), pause/resume,
+  city-map camera/layout/palette logic, diff parsing, multi-agent routing, template
+  instantiation, archive search, audit writes, usage reconciliation (estimated vs
+  provider-reported, with a double-count guard), and monitoring queries. Integration tests
+  invoke API route handlers directly against a temp database.
 - **E2E (Playwright)** — full UI journeys (house lifecycle, quest board, roost approvals,
-  city map, house panel, the High Lord Court, and the Phase 5 Ollama UI surface). E2E boots
-  web-only with a dedicated database and does **not** start the engine; external
+  city map, house panel, the High Lord Court, the Phase 5 Ollama UI surface, and the Phase 6
+  surfaces: templates, archives, audit, multi-agent houses, and usage/monitoring dashboards).
+  E2E boots web-only with a dedicated database and does **not** start the engine; external
   OpenCode/Ollama calls are mocked for determinism.

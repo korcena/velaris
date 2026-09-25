@@ -16,6 +16,7 @@ function house(over: Partial<HouseDto> & { id: string; name: string }): HouseDto
     kind: "agent",
     status: "active",
     agent: { name: "", role: "" },
+    agents: [],
     configuration: {
       systemPrompt: "",
       executionProvider: "opencode",

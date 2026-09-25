@@ -22,7 +22,7 @@ import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
 import { createOllamaAdapter } from "@/server/execution/ollama/provider";
 import { OpencodeClient } from "@/server/opencode";
 import { OllamaClient } from "@/server/execution/ollama/client";
-import type { HouseDto } from "@/shared/types";
+import type { HouseAgentDto, HouseDto } from "@/shared/types";
 
 /** Engine-facing deps a provider may need to be constructed / probed. */
 export interface ProviderFactoryDeps {
@@ -35,6 +35,19 @@ export interface ProviderFactoryDeps {
 /** Resolve the provider kind for a house from its stored execution provider. */
 export function resolveProviderKind(house: Pick<HouseDto, "configuration">): ProviderKind {
   return house.configuration.executionProvider;
+}
+
+/**
+ * Resolve the provider kind for a ROUTED agent. When the queue picks a
+ * non-default agent for a task, that agent's configuration drives provider
+ * dispatch (Phase 6 Stage B). With no agent (or the default agent, whose
+ * config === house.configuration) this is identical to `resolveProviderKind`.
+ */
+export function resolveProviderKindForAgent(
+  agent: Pick<HouseAgentDto, "configuration"> | null | undefined,
+  house: Pick<HouseDto, "configuration">,
+): ProviderKind {
+  return (agent?.configuration ?? house.configuration).executionProvider;
 }
 
 /** Build the AgentExecutionProvider for a provider kind.

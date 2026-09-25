@@ -11,6 +11,7 @@ import {
   ProjectDirectoryInvalidError,
 } from "@/server/repositories/project-repo";
 import { projectUpdateSchema } from "@/shared/schemas/project";
+import { recordAudit } from "@/server/repositories/audit-repo";
 import {
   ok,
   noContent,
@@ -50,6 +51,13 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       defaultModel: parsed.defaultModel,
       instructions: parsed.instructions,
     });
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "update",
+      entityType: "project",
+      entityId: project.id,
+      metadata: { changed: Object.keys(parsed) },
+    });
     return ok({ project });
   } catch (err) {
     if (err instanceof ProjectNotFoundError) return notFound(err.message);
@@ -64,7 +72,15 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   bootstrapDb();
   const { id } = await ctx.params;
   try {
+    const existing = getProject(getDb(), id);
     deleteProject(getDb(), id);
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "delete",
+      entityType: "project",
+      entityId: id,
+      metadata: { name: existing?.name ?? null },
+    });
     return noContent();
   } catch (err) {
     if (err instanceof ProjectNotFoundError) return notFound(err.message);

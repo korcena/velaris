@@ -450,6 +450,104 @@ template instantiation and archives search; migration test from Phase 1 schema h
 **Risks:** schema migration drift → every phase ships drizzle migrations, tested against
 a seeded copy of a real dev DB.
 
+### Acceptance & Retro (2026-09-25)
+
+> **Phase 6 was SPLIT at planning time (Q12 of the Phase 6 addendum).** **6.1 ships and is
+> gated now** (Stages 0, A–F); **6.2 is deferred** (real worktree isolation, FTS5 archive
+> scale-up, per-agent cost rollups, audit retention/export). Everything below asserts 6.1
+> only. The 6.1/6.2 split, and every other scope question, is recorded in
+> `docs/superpowers/plans/2026-09-25-phase6-advanced-platform.md` §18 — that addendum is the
+> source of truth and supersedes this section's own wording where they disagree.
+
+**Acceptance checklist (mapped to the three criteria above):**
+
+- [x] **(a) Usage graphs reconcile with OpenCode-reported session cost (±1%).** Proven by
+      `tests/unit/usage-reconciliation.test.ts` against a golden fixture; no live provider
+      is needed because the provider-reported cost is persisted **once at terminal**
+      (`estimated=0`) and the dashboard totals read `usage_records`, which the test asserts
+      equals the `execution_sessions` mirror. The **double-count guard** (summing both the
+      usage rows and the session mirror would return 2×) is asserted — total is the mirror,
+      never the sum. Relative error is ≤ 1% after the documented 4-dp display rounding.
+      Supporting: `tests/unit/usage-repo.test.ts`, `tests/integration/usage-route.test.ts`,
+      `tests/e2e/phase6-dashboard.spec.ts`.
+- [x] **(b) A template instantiates a fully configured house.** Proven by
+      `tests/unit/template-repo.test.ts`, `tests/integration/template-routes.test.ts`, and
+      `tests/e2e/phase6-templates.spec.ts`. Every configured field round-trips — agent +
+      configuration (provider, model, prompt, allowlist, tools, permissions), approval
+      policy, and concurrency — through instantiation, persistence, and normal editing
+      afterwards. Instantiation runs the same zod schemas/repo validation as direct creation
+      (no bypass; 400/409 unchanged).
+- [x] **(c) Archives search by task/house/text over ≥100 historical sessions.** Golden
+      datasets of **105** rows (`tests/e2e/phase6-archives.spec.ts`) and **120** rows
+      (`tests/unit/archive-repo.test.ts`, `tests/integration/archives-route.test.ts`) cover
+      full-text search, house filter, pagination, and `total`; `LIKE` over indexed columns
+      uses correct `%`/`_`/`\` escaping. FTS5 (verified available) is the documented **6.2**
+      upgrade, not part of this gate.
+- [x] **Migration test from Phase 1 schema head.** `tests/integration/migration-chain-head.test.ts`
+      reconstructs the Phase 1 head from `drizzle/meta/_journal.json`, seeds Phase-1 +
+      execution rows, runs the real `migrate()`, and asserts survival, empty
+      `PRAGMA foreign_key_check`, and idempotence. `tests/integration/migration-phase6-data-loss.test.ts`
+      is the seeded-real-DB guard.
+- [x] **Gates green:** `npx tsc --noEmit` **0**, all Vitest green (931 at close), all
+      Playwright specs green (45 at close). No dependency changes; `npm run lint` never run.
+
+**Deliverables status (6.1 — all landed):**
+
+- **AuditLog** — new `audit_log` table + repo; writes at web user-action sites (house, agent,
+  project, provider-config, template CRUD + approval responses); Settings card with history
+  and entity-type filter. `recordAudit` never throws into the request path (catch + log).
+- **Multi-agent houses** — `tasks.agent_id` (nullable), agent CRUD API/UI, `agents[]` on the
+  house DTO, per-agent configuration, and **conditional** runtime routing (only when
+  `task.agentId` is set; the single-agent path is byte-identical).
+- **House/project templates** — JSON-payload `templates` table (kind CHECK `house|project`),
+  idempotent seeded defaults (immutable), user-created templates, instantiate API/UI.
+- **Archives search** — read-only history over tasks/sessions/artifacts/messages, house +
+  text filters, pagination (`limit` default 25, cap 100) and `total`.
+- **Usage/cost dashboards** — per-house/per-model/per-time-bucket aggregation, estimated vs
+  provider-reported split, `/api/usage`; CSS bars + inline SVG only, **no chart dependency**.
+- **Monitoring panel** — engine health, queue depth, and error rate on the root dashboard
+  (`src/app/page.tsx`); REST poll (~5s), **no new SSE event type**, health probe bounded to 2s.
+- **Migration-safety harness** — Stage 0 chain test + real-DB guard.
+
+**Migrations (all ADDITIVE-ONLY):** `0005` `audit_log` (new table), `0006` `tasks.agent_id`
+(FK `ON DELETE SET NULL`, no rebuild), `0007` `templates` (new table). The Phase 5 FK-cascade
+lesson is codified in the Stage 0 harness: chain test from the Phase 1 head + real-DB guard,
+`foreign_key_check` asserted after every migration. No CHECK-constraint alteration was needed.
+
+**Deviations / notable decisions (Q1–Q12 accepted defaults, plan §18):** audit covers **web
+user-action rows only** — engine execution lifecycle stays in `execution_events` and is not
+duplicated (Q9); monitoring is a dashboard panel, not a dedicated `/monitoring` page (Q7);
+charts are hand-rolled with no dependency (Q8); archives use `LIKE` + indexes (Q5). **Deferred
+to 6.2:** per-agent cost rollups, agent-level disable/status, FTS5 archive scale-up, audit
+retention/export, dedicated `/monitoring` page, and **real worktree isolation (Stage G — not
+gated; the `/experimental/worktree` endpoint works live, but Phase 5's client method is wrong,
+the worktree root is outside the allowlist, and cleanup/branch-pollution design is unfinished).**
+
+**Defects found by independent testing/review and fixed during the phase:**
+
+1. **Default-agent ordering was non-deterministic on `created_at` ties.** A random-UUID
+   tiebreak could silently route a null-agent task to the wrong agent's model/prompt/allowlist.
+   Fixed to tie-break on `rowid` (monotonic INSERT order) in both agent listings.
+2. **A task PATCH that changed house left a foreign `agentId` attached** (pointing at an agent
+   of the old house). Now cleared when the effective house changes.
+3. **Template payload schemas were non-strict,** so a wrong-kind payload was silently
+   stripped/zeroed on PATCH/POST instead of returning 400. Now `.strict()` on every member.
+4. **Monitoring hard-coded the event-type list** instead of importing `EXECUTION_EVENT_TYPES`
+   from `src/shared/constants.ts`. Now imported.
+5. **Dashboard panels could fire one request per execution event.** Now debounced +
+   in-flight-aborted; the monitoring health probe is bounded to 2s.
+6. **`"task"` was advertised as an audit entity type but never written** (no task CRUD is
+   audited). Removed from `AUDIT_ENTITY_TYPES`.
+7. Additionally, the tester self-disclosed a test leak into the real dev DB. It was detected,
+   cleaned, and verified — no leak remains and the real DB is logically unchanged.
+
+**Residual / known limitations:** real worktree isolation is **6.2** and unverified live in the
+gated suite (the endpoint does work on this machine — `POST /experimental/worktree` returns
+`{name,branch,directory}` — but the Phase 5 client method is wrong and the worktree root is
+outside the allowlist; a fix + an opt-in `@real` smoke is 6.2). No `tasks.created_at` index yet
+(fine at the acceptance bar; add if archive scans show up). `execution_sessions.agent_id` is
+null for default-agent runs (it only matters for the deferred per-agent rollups).
+
 ---
 
 ## 11. MVP Acceptance Journey — Phase Mapping

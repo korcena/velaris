@@ -12,9 +12,15 @@ import {
   HouseNotArchivedError,
   HighLordTransitionError,
 } from "@/server/services/house-service";
-import { ProjectNotFoundError, ProjectDirectoryExistsError, ProjectHasTasksError } from "@/server/repositories/project-repo";
+import { ProjectNotFoundError, ProjectDirectoryExistsError, ProjectHasTasksError, ProjectDirectoryInvalidError } from "@/server/repositories/project-repo";
 import { ProviderConfigNotFoundError } from "@/server/repositories/provider-config-repo";
 import { TaskNotFoundError, InvalidTaskStatusTransitionError } from "@/server/repositories/task-repo";
+import {
+  TemplateNotFoundError,
+  SeededTemplateError,
+  TemplateNameExistsError,
+} from "@/server/repositories/template-repo";
+import { TemplateKindMismatchError } from "@/server/services/template-service";
 
 export function ok<T>(data: T, status = 200): NextResponse {
   return NextResponse.json(data, { status });
@@ -54,11 +60,19 @@ export function routeError(err: unknown): NextResponse {
     return badRequest("Validation failed", err.issues);
   }
   if (err instanceof HouseNotFoundError || err instanceof ProjectNotFoundError ||
-      err instanceof ProviderConfigNotFoundError || err instanceof TaskNotFoundError) {
+      err instanceof ProviderConfigNotFoundError || err instanceof TaskNotFoundError ||
+      err instanceof TemplateNotFoundError) {
     return notFound(err.message);
   }
-  if (err instanceof ProjectDirectoryExistsError || err instanceof ProjectHasTasksError) {
+  if (err instanceof ProjectDirectoryExistsError || err instanceof ProjectHasTasksError ||
+      err instanceof SeededTemplateError || err instanceof TemplateNameExistsError) {
     return conflict(err.message);
+  }
+  if (err instanceof ProjectDirectoryInvalidError) {
+    return badRequest(err.message);
+  }
+  if (err instanceof TemplateKindMismatchError) {
+    return badRequest(err.message);
   }
   if (err instanceof HouseNotArchivedError) {
     return conflict(err.message);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus, GitBranch, GitCommitHorizontal, GitMerge, Folder } from "lucide-react";
+import { Plus, GitBranch, GitCommitHorizontal, GitMerge, Folder, Sparkles } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { PageHeader } from "@/components/layout/page-header";
+import { TemplatePickerDialog } from "@/components/templates/template-picker-dialog";
 import { apiFetch } from "@/lib/api-client";
 import { projectCreateSchema } from "@/shared/schemas/project";
 import { isAbsolutePath } from "@/shared/path-helpers";
@@ -45,6 +46,7 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectDto | undefined>(undefined);
 
   const form = useForm<ProjectFormValues>({
@@ -115,9 +117,14 @@ export default function ProjectsPage() {
         title="Projects"
         subtitle="Working directories and repositories your houses operate within. Directories are validated to exist and must be unique."
         actions={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" /> Register project
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setTemplateOpen(true)} data-testid="new-from-template">
+              <Sparkles className="mr-2 h-4 w-4" /> New from template
+            </Button>
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" /> Register project
+            </Button>
+          </>
         }
       />
 
@@ -225,6 +232,18 @@ export default function ProjectsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <TemplatePickerDialog
+        kind="project"
+        open={templateOpen}
+        onOpenChange={setTemplateOpen}
+        onInstantiated={(res) => {
+          if (res.project) {
+            setProjects((prev) => [res.project!, ...prev]);
+            toast.success(`Project '${res.project.name}' registered from a template`);
+          }
+        }}
+      />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(undefined)}>
         <AlertDialogContent>

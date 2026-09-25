@@ -50,6 +50,18 @@ export interface HouseAgent {
   role: string;
 }
 
+/**
+ * A concrete agent row under a house (Phase 6 Stage B multi-agent). Distinct
+ * from `HouseAgent` (the create/edit input shape): this carries the row id and
+ * the agent's single configuration. `HouseDto.agents` lists all of them.
+ */
+export interface HouseAgentDto {
+  id: Id;
+  name: string;
+  role: string;
+  configuration: HouseConfiguration;
+}
+
 /** The full House DTO returned by the API (embeds agent + configuration). */
 export interface HouseDto {
   id: Id;
@@ -57,8 +69,19 @@ export interface HouseDto {
   description: string | null;
   kind: HouseKind;
   status: HouseStatus;
+  /**
+   * Backward-compatible singular agent = the house DEFAULT agent (the OLDEST
+   * agent). Existing consumers keep working unchanged; `agents` is the additive
+   * multi-agent list. For a single-agent house the two are the same agent.
+   */
   agent: HouseAgent;
   configuration: HouseConfiguration;
+  /**
+   * Phase 6 Stage B: every agent under this house, oldest-first. Always at
+   * least one entry for a created/seeded house (the default agent), so
+   * `agents[0]` mirrors `agent`/`configuration`.
+   */
+  agents: HouseAgentDto[];
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
 }
@@ -139,6 +162,11 @@ export interface TaskDto {
   status: TaskStatus;
   houseId: Id | null;
   projectId: Id | null;
+  /**
+   * Phase 6 Stage B: optional target agent. Null ⇒ route to the house default
+   * agent (pre-multi-agent behavior). ON DELETE SET NULL in the schema.
+   */
+  agentId: Id | null;
   workingDirectory: string | null;
   executionPreferences: ExecutionPreferences;
   attachments: TaskAttachment[];
@@ -425,6 +453,225 @@ export type HighLordPlanState =
   | "active"
   | "aborted"
   | "completed";
+
+/* ---------------------------- Audit log / Phase 6 ------------------- */
+
+/**
+ * audit_log.actor values (echoed by ck_audit_actor). The web process writes
+ * `user` action rows; `engine` is reserved for an additive engine-owned set
+ * (execution lifecycle stays in execution_events, not here).
+ */
+export type AuditActor = "user" | "engine";
+
+/**
+ * audit_log.entity_type values. Deliberately NOT a CHECK constraint (the
+ * column is extensible) so a new audited entity never forces a table rebuild;
+ * this union + AUDIT_ENTITY_TYPES list the known set surfaced by the UI.
+ * `task` is absent because no task CRUD is audited (see AUDIT_ENTITY_TYPES).
+ */
+export type AuditEntityType =
+  | "house"
+  | "agent"
+  | "project"
+  | "provider_config"
+  | "approval"
+  | "template";
+
+/** A single append-only audit entry surfaced to Settings. */
+export interface AuditLogDto {
+  id: Id;
+  actor: AuditActor;
+  actorAgentId: Id | null;
+  /** Free text ('create'|'update'|'delete'|'status'|'respond'|…), no CHECK. */
+  action: string;
+  entityType: AuditEntityType;
+  entityId: Id | null;
+  metadata: Record<string, unknown>;
+  createdAt: IsoTimestamp;
+}
+
+/* --------------------------- Templates / Phase 6 C ------------------ */
+
+/**
+ * templates.kind values (echoed by ck_templates_kind + TEMPLATE_KINDS).
+ * A house template's payload is a houseCreateSchema minus the name (which is
+ * instantiation-supplied); a project template's payload is description +
+ * defaultModel + instructions (the directory is supplied at instantiation).
+ */
+export type TemplateKind = "house" | "project";
+
+/** Stored/returned payload for a HOUSE template (validated by houseCreateSchema). */
+export interface HouseTemplatePayload {
+  description: string;
+  agent: HouseAgent;
+  configuration: HouseConfiguration;
+}
+
+/** Stored/returned payload for a PROJECT template (Q4: no allowlist). */
+export interface ProjectTemplatePayload {
+  description: string;
+  defaultModel: string | null;
+  instructions: string | null;
+}
+
+/** A reusable house/project template row surfaced to the API/UI. */
+export interface TemplateDto {
+  id: Id;
+  kind: TemplateKind;
+  name: string;
+  description: string;
+  /** Kind-specific payload; parsed JSON. See HouseTemplatePayload/ProjectTemplatePayload. */
+  payload: HouseTemplatePayload | ProjectTemplatePayload;
+  /** True for boot-seeded defaults, which are immutable via the API. */
+  isSeeded: boolean;
+  createdAt: IsoTimestamp;
+  updatedAt: IsoTimestamp;
+}
+
+/* --------------------------- Archives / Phase 6 D ------------------- */
+
+/**
+ * A read-only archive search result: one terminal task joined to its house and
+ * aggregated execution info. No new writer — pure read over tasks/sessions/
+ * artifacts/messages (Q5: LIKE + indexes for 6.1; FTS5 documented as the 6.2
+ * upgrade).
+ */
+export interface ArchiveEntryDto {
+  taskId: Id;
+  title: string;
+  status: TaskStatus;
+  type: string;
+  houseId: Id | null;
+  houseName: string | null;
+  /** Number of execution sessions recorded for this task. */
+  sessionCount: number;
+  /** SUM of the task's usage_records cost (0 when none). */
+  cost: number;
+  /** Best-effort first line of the task description or a result artifact. */
+  summarySnippet: string;
+  createdAt: IsoTimestamp;
+}
+
+/** Parsed/validated archive query (see archiveQuerySchema). */
+export interface ArchiveQuery {
+  q?: string;
+  houseId?: Id;
+  status?: TaskStatus;
+  type?: string;
+  from?: IsoTimestamp;
+  to?: IsoTimestamp;
+  limit: number;
+  offset: number;
+}
+
+/* --------------------------- Usage / Phase 6 E ---------------------- */
+
+/**
+ * Estimated-vs-provider-reported cost split plus token counters, aggregated
+ * over `usage_records` ONLY. The session mirror (`execution_sessions.*`) is
+ * deliberately never summed here — each terminal session writes exactly one
+ * usage row, so adding both would double-count (plan §16 risk 4).
+ *
+ * Invariant: `totalCost === estimatedCost + reportedCost`.
+ */
+export interface UsageTotalsDto {
+  /** SUM(cost) over every matched usage row. */
+  totalCost: number;
+  /** SUM(cost) where estimated=1 (Ollama local pricing). */
+  estimatedCost: number;
+  /** SUM(cost) where estimated=0 (provider-reported, e.g. OpenCode). */
+  reportedCost: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  /** Count of matched usage rows (one per terminal session). */
+  sessions: number;
+}
+
+/**
+ * One grouped row in a usage breakdown (per house / per model / per task).
+ * Carries the estimated/reported split so a stacked bar can render it.
+ */
+export interface UsageBreakdownDto {
+  /** Stable group key: houseId | `${provider}/${modelId}` | taskId. */
+  key: string;
+  /** Human label: house name | provider/modelId | task title. */
+  label: string;
+  houseId: Id | null;
+  taskId: Id | null;
+  provider: string | null;
+  modelId: string | null;
+  totalCost: number;
+  estimatedCost: number;
+  reportedCost: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  sessions: number;
+  /** True when ANY row in the group was an Ollama estimate. */
+  estimated: boolean;
+}
+
+/** One time bucket in the usage series (day or hour). */
+export interface UsageSeriesPointDto {
+  /** ISO day `YYYY-MM-DD` or hour `YYYY-MM-DDTHH` (lexical bucket key). */
+  bucket: string;
+  totalCost: number;
+  estimatedCost: number;
+  reportedCost: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Dashboard payload returned by GET /api/usage. */
+export interface UsageDashboardDto {
+  totals: UsageTotalsDto;
+  byHouse: UsageBreakdownDto[];
+  byModel: UsageBreakdownDto[];
+  /** Top tasks by cost (bounded) — the per-task breakdown. */
+  byTask: UsageBreakdownDto[];
+  /** Cost/token series ordered oldest→newest for the sparkline. */
+  series: UsageSeriesPointDto[];
+  bucket: "day" | "hour";
+  /** ISO timestamp the aggregate was computed (for an "as of" label). */
+  generatedAt: IsoTimestamp;
+}
+
+/* ------------------------- Monitoring / Phase 6 F ------------------- */
+
+/** Derived engine liveness from the persisted heartbeat. */
+export type EngineHealth = "online" | "stale" | "offline";
+
+/**
+ * Read-only engine/queue/error monitoring payload (Phase 6 Stage F). Pure read
+ * over `engine_state`, `tasks`, `execution_events` plus a best-effort OpenCode
+ * health probe. `providerHealth` is false when the server is unreachable.
+ */
+export interface MonitoringDto {
+  engineHeartbeatAt: IsoTimestamp | null;
+  /** Age of the heartbeat in ms; null when the engine has never run. */
+  heartbeatAgeMs: number | null;
+  engineVersion: string | null;
+  opencodeServerPid: string | null;
+  /** tasks.status='queued'. */
+  queueDepth: number;
+  /** tasks.status='running'. */
+  runningCount: number;
+  /** execution_events type='error' in the last 24h. */
+  errorsLast24h: number;
+  /** execution_events type='task_failed' in the last 24h. */
+  failuresLast24h: number;
+  /** All execution_events in the last 24h. */
+  eventsLast24h: number;
+  /** Best-effort OpenCode GET /api/health (false when unreachable). */
+  providerHealth: boolean;
+  /** Server-derived liveness so the UI/tests agree on the threshold. */
+  engineHealth: EngineHealth;
+  /** ISO timestamp the payload was computed. */
+  checkedAt: IsoTimestamp;
+}
 
 /* --------------------------- UI preferences ------------------------- */
 

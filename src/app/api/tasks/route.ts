@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { bootstrapDb } from "@/server/bootstrap";
 import { getDb } from "@/lib/db";
 import { listTasks, createTask } from "@/server/repositories/task-repo";
+import { agentBelongsToHouse } from "@/server/repositories/house-repo";
 import { taskCreateSchema } from "@/shared/schemas/task";
 import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 import { TASK_STATUSES } from "@/shared/constants";
@@ -35,6 +36,14 @@ export async function POST(req: NextRequest) {
       return badRequest("Request body must be valid JSON");
     }
     const parsed = taskCreateSchema.parse(body);
+    // Phase 6 Stage B: an explicit target agent must belong to the task's house
+    // (null agentId = house default, no check needed). An agent with no house is
+    // unroutable, so it is rejected as well.
+    if (parsed.agentId) {
+      if (!parsed.houseId || !agentBelongsToHouse(getDb(), parsed.agentId, parsed.houseId)) {
+        return badRequest("agentId does not belong to the selected house");
+      }
+    }
     const task = createTask(getDb(), {
       title: parsed.title,
       description: parsed.description ?? "",
@@ -42,6 +51,7 @@ export async function POST(req: NextRequest) {
       priority: parsed.priority,
       houseId: parsed.houseId,
       projectId: parsed.projectId,
+      agentId: parsed.agentId,
       workingDirectory: parsed.workingDirectory,
       executionPreferences: parsed.executionPreferences,
     });

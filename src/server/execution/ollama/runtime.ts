@@ -22,7 +22,7 @@
 
 import type Database from "better-sqlite3";
 import type { VelarisDb } from "@/lib/db";
-import type { HouseDto, TaskDto } from "@/shared/types";
+import type { HouseAgentDto, HouseConfiguration, HouseDto, TaskDto } from "@/shared/types";
 import type { OllamaClient } from "./client";
 import type { OllamaTool } from "./tools/types";
 import type { OllamaChatResponse } from "./types";
@@ -69,6 +69,12 @@ export interface OllamaRunContext {
   ollama: OllamaClient;
   task: TaskDto;
   house: HouseDto;
+  /**
+   * Phase 6 Stage B routed agent (present only for an explicit non-default
+   * target). Its configuration drives the loop; absent ⇒ house configuration as
+   * before (single-agent path unchanged).
+   */
+  agent?: HouseAgentDto | null;
   directory: string;
   modelId: string;
   log?: (msg: string) => void;
@@ -97,6 +103,10 @@ export async function runOllamaTask(
   opts: OllamaRunOptions = {},
 ): Promise<OllamaRunResult> {
   const { db, raw, ollama, task, house, directory, modelId } = ctx;
+  // Phase 6 Stage B: routed agent config when present; otherwise the same house
+  // configuration object as before (single-agent path unchanged).
+  const configuration: HouseConfiguration = ctx.agent?.configuration ?? house.configuration;
+  const agentId: string | null = ctx.agent?.id ?? null;
   const pollMs = opts.pollMs ?? OLLAMA_DEFAULTS.POLL_MS;
   const timeoutMs = opts.timeoutMs ?? OLLAMA_DEFAULTS.TIMEOUT_MS;
   const maxToolSteps = opts.maxToolSteps ?? OLLAMA_DEFAULTS.MAX_TOOL_STEPS;
@@ -105,10 +115,10 @@ export async function runOllamaTask(
   const signal = opts.signal;
   const startedAt = Date.now();
 
-  const registry = buildToolRegistry(house.configuration);
+  const registry = buildToolRegistry(configuration);
   const toolMap: Map<string, OllamaTool> = new Map(registry.map((t) => [t.name, t]));
   const toolDefs = toOllamaToolDefs(registry);
-  const allowlist = house.configuration.workspaceAllowlist;
+  const allowlist = configuration.workspaceAllowlist;
 
   const taskPrompt = composeTaskPrompt(task);
 
@@ -130,6 +140,7 @@ export async function runOllamaTask(
   const sessionId = isFreshRun ? createExecutionSession(db, {
     taskId: task.id,
     houseId: house.id,
+    agentId,
     provider: "ollama",
     modelId,
     directory,
@@ -205,7 +216,7 @@ export async function runOllamaTask(
       }
 
       // Rebuild messages from persisted memory (trimmed).
-      const messages = buildOllamaMessages(db, sessionId, house.configuration.systemPrompt, taskPrompt);
+      const messages = buildOllamaMessages(db, sessionId, configuration.systemPrompt, taskPrompt);
 
       // ---- Model call ----
       let resp: OllamaChatResponse;
@@ -316,13 +327,13 @@ export async function runOllamaTask(
 
         // Permission gate (Stage E).
         const gate: GateDecision = gateToolCall(tool, {
-          permissions: house.configuration.permissions,
-          approvalPolicy: house.configuration.approvalPolicy,
+          permissions: configuration.permissions,
+          approvalPolicy: configuration.approvalPolicy,
           pathInsideAllowlist: pathInside,
         });
         const autoExecute = shouldAutoExecute(gate, {
-          permissions: house.configuration.permissions,
-          approvalPolicy: house.configuration.approvalPolicy,
+          permissions: configuration.permissions,
+          approvalPolicy: configuration.approvalPolicy,
           pathInsideAllowlist: pathInside,
         });
 

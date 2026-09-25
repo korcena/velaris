@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { eq, and, sql, desc, gt, sum, count } from "drizzle-orm";
+import { eq, and, sql, desc, gt, gte, inArray, sum, count } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import {
   executionSessions,
@@ -27,6 +27,7 @@ import {
   artifacts,
   usageRecords,
   subtasks,
+  engineState,
   type ExecutionSessionRow,
   type ExecutionEventRow,
   type ApprovalRequestRow,
@@ -277,6 +278,46 @@ export function getLatestEventId(db: VelarisDb): number {
     .limit(1)
     .get();
   return row?.id ?? 0;
+}
+
+/**
+ * Count execution_events of the given types created at/after `since`
+ * (inclusive). Used by the Phase 6 Stage F monitoring panel for 24h error /
+ * failure rates. Pure read, index-backed by `idx_execution_events_type`.
+ */
+export function countEventsByTypeSince(
+  db: VelarisDb,
+  types: readonly ExecutionEventType[],
+  since: string,
+): number {
+  if (types.length === 0) return 0;
+  const row = db
+    .select({ c: count() })
+    .from(executionEvents)
+    .where(and(inArray(executionEvents.type, types as string[]), gte(executionEvents.createdAt, since)))
+    .get();
+  const v = row?.c;
+  if (typeof v === "number") return v;
+  if (typeof v === "bigint") return Number(v);
+  return 0;
+}
+
+/* ================================================================== */
+/* engine_state                                                        */
+/* ================================================================== */
+
+/**
+ * Read a single `engine_state` value by key (e.g. `engine_heartbeat_at`,
+ * `engine_version`, `opencode_server_pid`). Returns null when absent. Pure
+ * read used by the Phase 6 Stage F monitoring panel.
+ */
+export function getEngineStateKey(db: VelarisDb, key: string): string | null {
+  const row = db
+    .select({ value: engineState.value })
+    .from(engineState)
+    .where(eq(engineState.key, key))
+    .get();
+  return row?.value ?? null;
 }
 
 function eventRowToDto(row: ExecutionEventRow): ExecutionEventDto {

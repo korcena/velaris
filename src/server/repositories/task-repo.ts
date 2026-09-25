@@ -37,6 +37,7 @@ export function taskRowToDto(row: (typeof tasks.$inferSelect)): TaskDto {
     status: row.status as TaskStatus,
     houseId: row.houseId ?? null,
     projectId: row.projectId ?? null,
+    agentId: row.agentId ?? null,
     workingDirectory: row.workingDirectory ?? null,
     executionPreferences: parseJson<Record<string, unknown>>(row.executionPreferences, {}),
     attachments: parseJson<Array<{ name: string; path: string }>>(row.attachments, []),
@@ -82,6 +83,7 @@ export interface CreateTaskInput {
   priority?: TaskPriority;
   houseId?: string | null;
   projectId?: string | null;
+  agentId?: string | null;
   workingDirectory?: string | null;
   executionPreferences?: Record<string, unknown>;
   attachments?: Array<{ name: string; path: string }>;
@@ -100,6 +102,7 @@ export function createTask(db: VelarisDb, input: CreateTaskInput): TaskDto {
       status: "queued",
       houseId: input.houseId ?? null,
       projectId: input.projectId ?? null,
+      agentId: input.agentId ?? null,
       workingDirectory: input.workingDirectory ?? null,
       executionPreferences: JSON.stringify(input.executionPreferences ?? {}),
       attachments: JSON.stringify(input.attachments ?? []),
@@ -115,6 +118,7 @@ export type UpdateTaskPatch = {
   priority?: TaskPriority;
   houseId?: string | null;
   projectId?: string | null;
+  agentId?: string | null;
   workingDirectory?: string | null;
   /**
    * Replaces `execution_preferences` WHOLESALE (line 137 below does
@@ -147,6 +151,7 @@ export function updateTask(db: VelarisDb, id: string, patch: UpdateTaskPatch): T
   if (patch.priority !== undefined) set.priority = patch.priority;
   if (patch.houseId !== undefined) set.houseId = patch.houseId;
   if (patch.projectId !== undefined) set.projectId = patch.projectId;
+  if (patch.agentId !== undefined) set.agentId = patch.agentId;
   if (patch.workingDirectory !== undefined) set.workingDirectory = patch.workingDirectory;
   if (patch.executionPreferences !== undefined)
     set.executionPreferences = JSON.stringify(patch.executionPreferences);
@@ -222,6 +227,23 @@ export function writeTaskPlanAbortReason(
     .where(eq(tasks.id, taskId))
     .run();
   return getTask(db, taskId);
+}
+
+/**
+ * Count tasks in a given status. Used by the Phase 6 Stage F monitoring panel
+ * for queue depth (`queued`) and running count (`running`). Pure read.
+ */
+export function countTasksByStatus(db: VelarisDb, status: TaskStatus): number {
+  const row = db
+    .select({ c: sql<number>`COUNT(*)` })
+    .from(tasks)
+    .where(eq(tasks.status, status))
+    .get();
+  const v = row?.c;
+  if (typeof v === "number") return v;
+  if (typeof v === "bigint") return Number(v);
+  if (typeof v === "string") return Number(v) || 0;
+  return 0;
 }
 
 /** Raw task id columns for tasks still `queued` (used by the engine queue poll). */

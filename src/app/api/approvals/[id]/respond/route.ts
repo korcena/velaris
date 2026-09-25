@@ -7,6 +7,7 @@ import {
   setApprovalResponse,
   markNotificationsReadForApproval,
 } from "@/server/repositories/execution-repo";
+import { recordAudit } from "@/server/repositories/audit-repo";
 import { ok, notFound, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +78,20 @@ export async function POST(
     // The web process owns notification read state; `approvalRequestId` links the
     // notification to the approval, so we mark by that key.
     markNotificationsReadForApproval(getDb(), updated.id);
+
+    // The web's only execution-adjacent write → the one approval audit row.
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "respond",
+      entityType: "approval",
+      entityId: updated.id,
+      metadata: {
+        responseAction: parsed.action,
+        status: updated.status,
+        houseId: updated.houseId,
+        taskId: updated.taskId,
+      },
+    });
 
     return ok({ approval: updated });
   } catch (err) {

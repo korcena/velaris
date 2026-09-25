@@ -46,6 +46,37 @@ export const houseConfigurationSchema = z.object({
   concurrency: z.number().int().min(1, { message: "Concurrency must be ≥ 1" }).default(1),
 });
 
+/* ---------------------- Agent CRUD (Phase 6 Stage B) ------------------ */
+
+/**
+ * Create a standalone agent under a house: name + role + its single
+ * configuration. The house id comes from the route path, never the body.
+ * `.strict()` so a client cannot smuggle `houseId`/`status`/`id`.
+ */
+export const houseAgentCreateSchema = z
+  .object({
+    name: trimmedNonEmpty(120).describe("Agent name, e.g. 'Azriel'"),
+    role: trimmedNonEmpty(200).describe("Agent role, e.g. 'Shadow-singer · senior engineer'"),
+    configuration: houseConfigurationSchema,
+  })
+  .strict();
+
+export type HouseAgentCreateInput = z.infer<typeof houseAgentCreateSchema>;
+
+/**
+ * Partial update of an agent. Reuses the create shape so only supplied keys are
+ * merged (repo patches nested config keys independently).
+ */
+export const houseAgentUpdateSchema = z
+  .object({
+    name: trimmedNonEmpty(120).optional(),
+    role: trimmedNonEmpty(200).optional(),
+    configuration: houseConfigurationSchema.partial().optional(),
+  })
+  .strict();
+
+export type HouseAgentUpdateInput = z.infer<typeof houseAgentUpdateSchema>;
+
 /* ----------------------------- Houses ------------------------------- */
 
 const houseBase = z.object({

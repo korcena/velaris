@@ -11,7 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import { rawDb } from "@/lib/db";
 import { houses, agents, agentConfigurations } from "@/lib/db/schema";
@@ -23,6 +23,7 @@ import type {
   HouseKind,
   Permissions,
   HouseAgent,
+  HouseAgentDto,
   HouseConfiguration,
 } from "@/shared/types";
 
@@ -52,6 +53,26 @@ export class HouseNotArchivedError extends Error {
   }
 }
 
+/* --------------------------- Agent errors (Phase 6 Stage B) ---------- */
+
+export class AgentNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Agent not found: ${id}`);
+    this.name = "AgentNotFoundError";
+  }
+}
+
+/**
+ * Refuses deletion of a house's ONLY agent: a house must always keep one agent
+ * (the default used when `tasks.agent_id` is null). Mapped to 409.
+ */
+export class LastAgentError extends Error {
+  constructor(houseId: string) {
+    super(`Cannot delete the last agent of house ${houseId} — a house must keep one`);
+    this.name = "LastAgentError";
+  }
+}
+
 /* --------------------------- Transition rules ------------------------ */
 
 const TRANSITIONS: Record<HouseStatus, HouseStatus[]> = {
@@ -71,58 +92,115 @@ export function canDelete(status: HouseStatus): boolean {
 
 /* ------------------------------ Mapping ------------------------------ */
 
+const DEFAULT_CONFIGURATION: HouseConfiguration = {
+  systemPrompt: "",
+  executionProvider: "opencode",
+  aiProvider: "ollama-cloud",
+  modelId: "",
+  workspaceAllowlist: [],
+  tools: [],
+  permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+  approvalPolicy: "always",
+  concurrency: 1,
+};
+
+/** Map an agent_configurations row onto the shared HouseConfiguration shape. */
+function configRowToDto(config: typeof agentConfigurations.$inferSelect | undefined): HouseConfiguration {
+  if (!config) return { ...DEFAULT_CONFIGURATION };
+  return {
+    systemPrompt: config.systemPrompt,
+    executionProvider: config.executionProvider as HouseConfiguration["executionProvider"],
+    aiProvider: config.aiProvider,
+    modelId: config.modelId,
+    workspaceAllowlist: parseJson<string[]>(config.workspaceAllowlist, []),
+    tools: parseJson<string[]>(config.tools, []),
+    permissions: parseJson<Permissions>(config.permissions, {
+      fileSystem: "ask",
+      shell: "ask",
+      network: "deny",
+      git: "allow",
+    }),
+    approvalPolicy: config.approvalPolicy as HouseConfiguration["approvalPolicy"],
+    concurrency: config.concurrency,
+  };
+}
+
+/**
+ * All agents for a house, OLDEST FIRST (the Phase 6 default-agent rule), each
+ * with its single configuration. Always loads every agent (no `.limit(1)`) so
+ * the DTO can expose `agents[]`.
+ */
+export function listAgentsForHouse(db: VelarisDb, houseId: string): HouseAgentDto[] {
+  const agentRows = db
+    .select()
+    .from(agents)
+    .where(eq(agents.houseId, houseId))
+    // `created_at` is millisecond-resolution, so two agents created in the same
+    // tick tie. Tie-break on `rowid` (monotonic INSERT order) rather than on the
+    // random uuid `id`, which is not correlated with insertion order and can
+    // silently invert the "oldest agent is the default" rule.
+    .orderBy(agents.createdAt, sql`rowid`)
+    .all();
+  return agentRows.map((a) => {
+    const config = db
+      .select()
+      .from(agentConfigurations)
+      .where(eq(agentConfigurations.agentId, a.id))
+      .limit(1)
+      .get();
+    return {
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      configuration: configRowToDto(config),
+    };
+  });
+}
+
+/**
+ * The house default agent = the OLDEST agent (Phase 6 Q2), used whenever a
+ * task's `agent_id` is null. Null when the house has no agent rows.
+ */
+export function resolveDefaultAgent(db: VelarisDb, houseId: string): HouseAgentDto | null {
+  return listAgentsForHouse(db, houseId)[0] ?? null;
+}
+
+/**
+ * Resolve the agent a task should run as (Phase 6 Stage B):
+ *  - a set `task.agentId` that belongs to the house → that agent + its config;
+ *  - otherwise the house default (oldest agent).
+ * Returns null when the house has no agents at all (defensive).
+ *
+ * Single-agent behavior is preserved: with no `task.agentId` this returns the
+ * same oldest/default agent the pre-multi-agent code used.
+ */
+export function resolveRuntimeAgent(
+  db: VelarisDb,
+  houseId: string,
+  task: { agentId?: string | null },
+): HouseAgentDto | null {
+  const all = listAgentsForHouse(db, houseId);
+  if (task.agentId) {
+    const chosen = all.find((a) => a.id === task.agentId);
+    if (chosen) return chosen;
+  }
+  return all[0] ?? null;
+}
+
 export function houseRowToDto(db: VelarisDb, houseId: string): HouseDto | null {
   const h = db.select().from(houses).where(eq(houses.id, houseId)).get();
   if (!h) return null;
 
-  const agent = db
-    .select()
-    .from(agents)
-    .where(eq(agents.houseId, houseId))
-    .limit(1)
-    .get();
+  const agentsForHouse = listAgentsForHouse(db, houseId);
 
-  const config = agent
-    ? db
-        .select()
-        .from(agentConfigurations)
-        .where(eq(agentConfigurations.agentId, agent.id))
-        .limit(1)
-        .get()
-    : undefined;
-
-  const agentDto: HouseAgent = agent
-    ? { name: agent.name, role: agent.role }
+  // Backward-compatible singular agent = the default (oldest) agent.
+  const defaultAgent = agentsForHouse[0];
+  const agentDto: HouseAgent = defaultAgent
+    ? { name: defaultAgent.name, role: defaultAgent.role }
     : { name: "", role: "" };
-
-  const configuration: HouseConfiguration = config
-    ? {
-        systemPrompt: config.systemPrompt,
-        executionProvider: config.executionProvider as HouseConfiguration["executionProvider"],
-        aiProvider: config.aiProvider,
-        modelId: config.modelId,
-        workspaceAllowlist: parseJson<string[]>(config.workspaceAllowlist, []),
-        tools: parseJson<string[]>(config.tools, []),
-        permissions: parseJson<Permissions>(config.permissions, {
-          fileSystem: "ask",
-          shell: "ask",
-          network: "deny",
-          git: "allow",
-        }),
-        approvalPolicy: config.approvalPolicy as HouseConfiguration["approvalPolicy"],
-        concurrency: config.concurrency,
-      }
-    : {
-        systemPrompt: "",
-        executionProvider: "opencode",
-        aiProvider: "ollama-cloud",
-        modelId: "",
-        workspaceAllowlist: [],
-        tools: [],
-        permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
-        approvalPolicy: "always",
-        concurrency: 1,
-      };
+  const configuration: HouseConfiguration = defaultAgent
+    ? defaultAgent.configuration
+    : { ...DEFAULT_CONFIGURATION };
 
   return {
     id: h.id,
@@ -132,6 +210,7 @@ export function houseRowToDto(db: VelarisDb, houseId: string): HouseDto | null {
     status: h.status as HouseStatus,
     agent: agentDto,
     configuration,
+    agents: agentsForHouse,
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
   };
@@ -261,6 +340,9 @@ export function updateHouse(db: VelarisDb, id: string, patch: UpdateHousePatch):
       .select()
       .from(agents)
       .where(eq(agents.houseId, houseId))
+      // Same rowid tie-break as listAgentsForHouse: the DEFAULT agent must be
+      // the one inserted first even when created_at ties.
+      .orderBy(agents.createdAt, sql`rowid`)
       .limit(1)
       .get();
 
@@ -338,6 +420,165 @@ export function deleteHouse(db: VelarisDb, id: string): void {
   }
 
   db.delete(houses).where(eq(houses.id, id)).run();
+}
+
+/* ------------------------ Agent CRUD (Phase 6) ---------------------- */
+
+export interface CreateAgentInput {
+  id?: string;
+  name: string;
+  role: string;
+  configuration: HouseConfiguration;
+}
+
+function assertHouseExists(db: VelarisDb, houseId: string): void {
+  const row = db.select({ id: houses.id }).from(houses).where(eq(houses.id, houseId)).get();
+  if (!row) throw new HouseNotFoundError(houseId);
+}
+
+/**
+ * Create a standalone agent + its single configuration under a house, in one
+ * transaction. The unique `idx_agent_configurations_agent` index stays intact
+ * because every agent gets exactly one config row.
+ */
+export function createAgent(
+  db: VelarisDb,
+  houseId: string,
+  input: CreateAgentInput,
+): HouseAgentDto {
+  assertHouseExists(db, houseId);
+  const agentId = input.id ?? randomUUID();
+  const configId = randomUUID();
+
+  db.transaction((tx) => {
+    tx.insert(agents)
+      .values({ id: agentId, houseId, name: input.name, role: input.role })
+      .run();
+    tx.insert(agentConfigurations)
+      .values({
+        id: configId,
+        agentId,
+        systemPrompt: input.configuration.systemPrompt,
+        executionProvider: input.configuration.executionProvider,
+        aiProvider: input.configuration.aiProvider,
+        modelId: input.configuration.modelId,
+        workspaceAllowlist: JSON.stringify(input.configuration.workspaceAllowlist ?? []),
+        tools: JSON.stringify(input.configuration.tools ?? []),
+        permissions: JSON.stringify(input.configuration.permissions ?? {}),
+        approvalPolicy: input.configuration.approvalPolicy,
+        concurrency: input.configuration.concurrency,
+      })
+      .run();
+  });
+
+  const created = listAgentsForHouse(db, houseId).find((a) => a.id === agentId);
+  if (!created) throw new AgentNotFoundError(agentId);
+  return created;
+}
+
+export function getAgent(db: VelarisDb, agentId: string): HouseAgentDto | null {
+  const agent = db.select().from(agents).where(eq(agents.id, agentId)).get();
+  if (!agent) return null;
+  const config = db
+    .select()
+    .from(agentConfigurations)
+    .where(eq(agentConfigurations.agentId, agent.id))
+    .limit(1)
+    .get();
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    configuration: configRowToDto(config),
+  };
+}
+
+export type UpdateAgentPatch = {
+  name?: string;
+  role?: string;
+  configuration?: Partial<HouseConfiguration>;
+};
+
+/** Merge a partial patch onto an agent + its config in one transaction. */
+export function updateAgent(
+  db: VelarisDb,
+  agentId: string,
+  patch: UpdateAgentPatch,
+): HouseAgentDto {
+  const existing = db.select().from(agents).where(eq(agents.id, agentId)).get();
+  if (!existing) throw new AgentNotFoundError(agentId);
+
+  db.transaction((tx) => {
+    const aUpdate: Record<string, unknown> = {};
+    if (patch.name !== undefined) aUpdate.name = patch.name;
+    if (patch.role !== undefined) aUpdate.role = patch.role;
+    if (Object.keys(aUpdate).length) {
+      aUpdate.updatedAt = new Date().toISOString();
+      tx.update(agents).set(aUpdate).where(eq(agents.id, agentId)).run();
+    }
+
+    const config = tx
+      .select()
+      .from(agentConfigurations)
+      .where(eq(agentConfigurations.agentId, agentId))
+      .limit(1)
+      .get();
+
+    if (config && patch.configuration) {
+      const p = patch.configuration;
+      const cUpdate: Record<string, unknown> = {};
+      if (p.systemPrompt !== undefined) cUpdate.systemPrompt = p.systemPrompt;
+      if (p.executionProvider !== undefined) cUpdate.executionProvider = p.executionProvider;
+      if (p.aiProvider !== undefined) cUpdate.aiProvider = p.aiProvider;
+      if (p.modelId !== undefined) cUpdate.modelId = p.modelId;
+      if (p.workspaceAllowlist !== undefined)
+        cUpdate.workspaceAllowlist = JSON.stringify(p.workspaceAllowlist);
+      if (p.tools !== undefined) cUpdate.tools = JSON.stringify(p.tools);
+      if (p.permissions !== undefined) cUpdate.permissions = JSON.stringify(p.permissions);
+      if (p.approvalPolicy !== undefined) cUpdate.approvalPolicy = p.approvalPolicy;
+      if (p.concurrency !== undefined) cUpdate.concurrency = p.concurrency;
+      if (Object.keys(cUpdate).length) {
+        cUpdate.updatedAt = new Date().toISOString();
+        tx.update(agentConfigurations)
+          .set(cUpdate)
+          .where(eq(agentConfigurations.id, config.id))
+          .run();
+      }
+    }
+  });
+
+  const updated = getAgent(db, agentId);
+  if (!updated) throw new AgentNotFoundError(agentId);
+  return updated;
+}
+
+/**
+ * Delete an agent. Rules:
+ *  - unknown id → AgentNotFoundError (404);
+ *  - the house's LAST agent → LastAgentError (409) — a house must always keep
+ *    one agent so the null-`agent_id` default path is never broken;
+ *  - otherwise delete (cascades the config; `tasks.agent_id` SET NULLs).
+ */
+export function deleteAgent(db: VelarisDb, agentId: string): void {
+  const agent = db.select().from(agents).where(eq(agents.id, agentId)).get();
+  if (!agent) throw new AgentNotFoundError(agentId);
+
+  const countRow = rawDb(db)
+    .prepare(`SELECT COUNT(*) AS c FROM agents WHERE house_id = ?`)
+    .get(agent.houseId) as { c: number };
+  if (countRow.c <= 1) throw new LastAgentError(agent.houseId);
+
+  db.delete(agents).where(eq(agents.id, agentId)).run();
+}
+
+/** Whether an agent belongs to a given house (task-routing validation). */
+export function agentBelongsToHouse(db: VelarisDb, agentId: string, houseId: string): boolean {
+  const row = db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(sql`${agents.id} = ${agentId} AND ${agents.houseId} = ${houseId}`)
+    .get();
+  return !!row;
 }
 
 /* ------------------------- Query helpers ---------------------------- */

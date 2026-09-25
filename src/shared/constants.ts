@@ -17,6 +17,9 @@ import type {
   ArtifactKind,
   NotificationType,
   SubtaskStatus,
+  AuditActor,
+  AuditEntityType,
+  TemplateKind,
 } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -342,6 +345,135 @@ export const DEFAULT_PROVIDER_BASE_URLS: Record<
 /** Default port for spawning `opencode serve --port <p>` (opencode-server.ts). */
 export const DEFAULT_OPENCODE_PORT = 4096;
 
+/* ------------------------------------------------------------------ */
+/* Audit log (Phase 6 Stage A)                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * audit_log.actor values (echoed by ck_audit_actor). The web process only ever
+ * writes 'user' action rows; 'engine' is reserved for a small additive
+ * engine-owned set. Engine execution lifecycle is NOT duplicated here (it lives
+ * in execution_events), so there are no engine writers in this stage.
+ */
+export const AUDIT_ACTORS: readonly AuditActor[] = ["user", "engine"] as const;
+
+/**
+ * Known audit_log.entity_type values. The column has NO CHECK constraint (it is
+ * deliberately extensible so new audited entities never force a table rebuild);
+ * this list is the well-known set the Settings UI filter offers.
+ *
+ * `task` is deliberately absent: no task CRUD is audited (Q9 scoped audit to
+ * web user-action rows; task lifecycle lives in execution_events), so a `task`
+ * filter option could never return rows. Add it back only alongside real writes.
+ */
+export const AUDIT_ENTITY_TYPES: readonly AuditEntityType[] = [
+  "house",
+  "agent",
+  "project",
+  "provider_config",
+  "approval",
+  "template",
+] as const;
+
 /** Default OpenCode-provider IDs & model hints (never hardcoded at runtime; advisory only). */
 export const DEFAULT_AI_PROVIDER = "ollama-cloud";
 export const DEFAULT_MODEL_ID = "";
+
+/* ------------------------------------------------------------------ */
+/* Templates (Phase 6 Stage C)                                        */
+/* ------------------------------------------------------------------ */
+
+/** templates.kind values (echoed by ck_templates_kind). */
+export const TEMPLATE_KINDS: readonly TemplateKind[] = ["house", "project"] as const;
+
+/**
+ * Seeded default templates (idempotent on boot by (kind,name), never clobber
+ * user edits, immutable via the API). House payloads follow the
+ * `houseCreateSchema` shape minus `name` (supplied at instantiation); project
+ * payloads carry description/defaultModel/instructions per Q4 (no allowlist;
+ * the directory is supplied at instantiation and validated by the repo).
+ */
+export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
+  {
+    kind: "house",
+    name: "Research House",
+    description: "An investigation-focused house that reads and reports.",
+    payload: {
+      description: "Reads, gathers, and summarises — never edits.",
+      agent: { name: "Researcher", role: "Scholar · investigator" },
+      configuration: {
+        systemPrompt:
+          "You are a meticulous researcher. Gather sources, verify claims, and present a concise, well-structured report with citations.",
+        executionProvider: "opencode",
+        aiProvider: "ollama-cloud",
+        modelId: "glm-5.3",
+        workspaceAllowlist: [],
+        tools: ["fs"],
+        permissions: { fileSystem: "ask", shell: "deny", network: "ask", git: "deny" },
+        approvalPolicy: "always",
+        concurrency: 1,
+      },
+    },
+  },
+  {
+    kind: "house",
+    name: "Engineering House",
+    description: "A build-focused house that edits code and runs the suite.",
+    payload: {
+      description: "Implements changes, runs tests, and keeps diffs tight.",
+      agent: { name: "Engineer", role: "Smith · senior engineer" },
+      configuration: {
+        systemPrompt:
+          "You are a careful senior engineer. Make minimal, well-tested changes and explain your reasoning briefly.",
+        executionProvider: "opencode",
+        aiProvider: "ollama-cloud",
+        modelId: "glm-5.3",
+        workspaceAllowlist: [],
+        tools: ["fs", "shell", "git"],
+        permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+        approvalPolicy: "risky_only",
+        concurrency: 1,
+      },
+    },
+  },
+  {
+    kind: "house",
+    name: "Docs House",
+    description: "A documentation-focused house that writes and edits prose.",
+    payload: {
+      description: "Writes clear documentation and keeps it consistent.",
+      agent: { name: "Scribe", role: "Archivist · technical writer" },
+      configuration: {
+        systemPrompt:
+          "You are a precise technical writer. Prefer clear, concise prose and consistent terminology.",
+        executionProvider: "opencode",
+        aiProvider: "ollama-cloud",
+        modelId: "glm-5.3",
+        workspaceAllowlist: [],
+        tools: ["fs"],
+        permissions: { fileSystem: "ask", shell: "deny", network: "deny", git: "allow" },
+        approvalPolicy: "always",
+        concurrency: 1,
+      },
+    },
+  },
+  {
+    kind: "project",
+    name: "Standard Repo",
+    description: "A conventional repository project (directory supplied at instantiation).",
+    payload: {
+      description: "Standard repository project.",
+      defaultModel: "glm-5.3",
+      instructions:
+        "Read the repository conventions before editing; keep changes focused and run the test suite.",
+    },
+  },
+] as const;
+
+/** Shape of a seeded default template (payload parsed from JSON on insert). */
+export interface DefaultTemplate {
+  kind: TemplateKind;
+  name: string;
+  description: string;
+  payload: Record<string, unknown>;
+}

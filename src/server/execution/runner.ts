@@ -41,7 +41,7 @@ import {
   markAgentMessageRelayed,
 } from "@/server/repositories/execution-repo";
 import { setTaskStatus, getTask } from "@/server/repositories/task-repo";
-import type { HouseDto, SessionStatus, TaskDto } from "@/shared/types";
+import type { HouseAgentDto, HouseConfiguration, HouseDto, SessionStatus, TaskDto } from "@/shared/types";
 
 export interface RunContext {
   db: VelarisDb;
@@ -50,6 +50,15 @@ export interface RunContext {
   client: OpencodeClient;
   task: TaskDto;
   house: HouseDto;
+  /**
+   * Phase 6 Stage B routed agent. Present only when the task explicitly targets
+   * a non-default agent; null/absent means run with the house configuration
+   * exactly as before (single-agent path unchanged). When present its
+   * `configuration` drives the run and its id is recorded on the session.
+   */
+  agent?: HouseAgentDto | null;
+  /** Explicit agent id recorded on execution_sessions.agent_id (defaults null). */
+  agentId?: string | null;
   directory: string;
   modelId: string;
   /**
@@ -91,6 +100,11 @@ const DEFAULT_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2h
  */
 export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promise<RunResult> {
   const { db, raw, adapter, client, task, house, directory, modelId } = ctx;
+  // Phase 6 Stage B: the routed agent's configuration drives the run when one is
+  // present. With no agent this is the SAME house.configuration object as
+  // before, so the single-agent path is byte-identical.
+  const configuration: HouseConfiguration = ctx.agent?.configuration ?? house.configuration;
+  const agentId: string | null = ctx.agent?.id ?? ctx.agentId ?? null;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   const quietMs = opts.completionQuietMs ?? DEFAULT_COMPLETION_QUIET_MS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -101,6 +115,7 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
   const session = createExecutionSession(db, {
     taskId: task.id,
     houseId: house.id,
+    agentId,
     provider: "opencode",
     modelId,
     directory,
@@ -145,11 +160,11 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
       taskId: task.id,
       sessionId,
       workingDirectory: directory,
-      systemPrompt: house.configuration.systemPrompt,
+      systemPrompt: configuration.systemPrompt,
       taskPrompt: composeTaskPrompt(task),
-      aiProvider: house.configuration.aiProvider,
+      aiProvider: configuration.aiProvider,
       modelId,
-      approvalPolicy: house.configuration.approvalPolicy,
+      approvalPolicy: configuration.approvalPolicy,
     });
     providerSessionId = started.providerSessionId;
     if (!providerSessionId) {
@@ -317,7 +332,7 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
           await adapter.sendMessage({
             sessionId,
             providerSessionId,
-            aiProvider: house.configuration.aiProvider,
+            aiProvider: configuration.aiProvider,
             modelId,
             message: pending.content,
           });
@@ -481,7 +496,7 @@ async function handleProviderEvent(
     // `risky_only` granularity is deferred (Phase 2): the OpenCode permission
     // payload doesn't reliably carry risk classification, so for now `risky_only`
     // is treated like `always` (bird everything) — see AGENT_ORCHESTRATION §2.1.
-    const policy = house.configuration.approvalPolicy;
+    const policy = (ctx.agent?.configuration ?? house.configuration).approvalPolicy;
     const autoApprove =
       policy === "never" && mapped.approval.kind === "permission";
 
@@ -563,6 +578,7 @@ async function persistTerminal(
   cost: { cost: number; input: number; output: number; reasoning: number; cacheRead: number } | null,
 ): Promise<void> {
   const { db, adapter, task, house } = ctx;
+  const configuration: HouseConfiguration = ctx.agent?.configuration ?? house.configuration;
   const now = new Date().toISOString();
   const usageCost = cost ?? { cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0 };
 
@@ -571,7 +587,7 @@ async function persistTerminal(
     sessionId,
     taskId: task.id,
     houseId: house.id,
-    modelId: house.configuration.modelId,
+    modelId: configuration.modelId,
     provider: "opencode",
     cost: usageCost,
     estimated: false,

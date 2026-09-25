@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { RuntimeStatusBadge } from "@/components/houses/runtime-status-badge";
 import { ApprovalList } from "@/components/approvals/approvals-list";
 import { HouseOverview } from "@/components/houses/overview/house-overview";
+import { HouseAgentsPanel } from "@/components/houses/house-agents-panel";
 import { ActivityTimeline } from "@/components/houses/activity/activity-timeline";
 import { TaskResults } from "@/components/houses/results/task-results";
 import { useVelarisStream } from "@/components/realtime/velaris-stream";
@@ -252,6 +253,7 @@ export default function HouseDetailPage() {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="agents">Agents</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="chat">Agent Chat</TabsTrigger>
           <TabsTrigger value="results">Task Results</TabsTrigger>
@@ -266,6 +268,34 @@ export default function HouseDetailPage() {
               Loading the house…
             </p>
           )}
+        </TabsContent>
+
+        <TabsContent value="agents" className="pt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-serif-display text-xl">Agents</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {house ? (
+                <HouseAgentsPanel
+                  houseId={houseId}
+                  agents={house.agents}
+                  onChanged={() => {
+                    // Refetch the detail so agents[] (and the default agent) update.
+                    apiFetch<{ house: HouseDetailDto }>(`/api/houses/${houseId}`)
+                      .then((res) => setHouse(res.house))
+                      .catch(() => {
+                        /* the stream refetch will catch up */
+                      });
+                  }}
+                />
+              ) : (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  Loading the house…
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="activity" className="pt-4">
