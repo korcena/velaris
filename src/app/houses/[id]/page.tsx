@@ -280,6 +280,7 @@ export default function HouseDetailPage() {
                 <HouseAgentsPanel
                   houseId={houseId}
                   agents={house.agents}
+                  rosterFixed={house.kind === "high_lord"}
                   onChanged={() => {
                     // Refetch the detail so agents[] (and the default agent) update.
                     apiFetch<{ house: HouseDetailDto }>(`/api/houses/${houseId}`)

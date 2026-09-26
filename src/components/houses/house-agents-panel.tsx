@@ -44,6 +44,11 @@ interface Props {
   houseId: string;
   /** All agents, oldest-first; index 0 is the house default. */
   agents: HouseAgentDto[];
+  /**
+   * The High Lord's roster is fixed (singleton): hide Add/delete, keep Edit,
+   * and pin the execution provider to OpenCode (its planning path requires it).
+   */
+  rosterFixed?: boolean;
   /** Called after a successful create/update/delete so the parent can refetch. */
   onChanged: () => void;
 }
@@ -85,7 +90,7 @@ function configFrom(draft: AgentDraft, base: AgentConfiguration): AgentConfigura
   };
 }
 
-export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
+export function HouseAgentsPanel({ houseId, agents, rosterFixed = false, onChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<HouseAgentDto | null>(null);
   const [saving, setSaving] = useState(false);
@@ -109,8 +114,17 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setDraft(editing ? draftFrom(editing) : draftFrom(defaultAgent ?? emptyAgent()));
-  }, [open, editing, defaultAgent]);
+    const next = editing ? draftFrom(editing) : draftFrom(defaultAgent ?? emptyAgent());
+    // The High Lord must run on OpenCode. A legacy/manual row could still hold
+    // executionProvider='ollama', which would make the (disabled) select pin
+    // that value and every submit 422. Coerce the draft so the invariant holds;
+    // normal houses are untouched.
+    const coerced: AgentDraft =
+      rosterFixed && next.executionProvider !== "opencode"
+        ? { ...next, executionProvider: "opencode" }
+        : next;
+    setDraft(coerced);
+  }, [open, editing, defaultAgent, rosterFixed]);
 
   function set<K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -191,9 +205,11 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
             quest does not target a specific agent.
           </p>
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={openCreate}>
-          <UserPlus className="mr-1 h-3.5 w-3.5" /> Add agent
-        </Button>
+        {rosterFixed ? null : (
+          <Button type="button" variant="outline" size="sm" onClick={openCreate}>
+            <UserPlus className="mr-1 h-3.5 w-3.5" /> Add agent
+          </Button>
+        )}
       </div>
 
       <ul className="space-y-2">
@@ -224,17 +240,19 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
                 <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(agent)}>
                   Edit
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={isDefault || busyId === agent.id}
-                  onClick={() => remove(agent, isDefault)}
-                  aria-label={`Remove ${agent.name}`}
-                  className="text-velaris-crimson hover:bg-velaris-crimson/10"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                {rosterFixed ? null : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={isDefault || busyId === agent.id}
+                    onClick={() => remove(agent, isDefault)}
+                    aria-label={`Remove ${agent.name}`}
+                    className="text-velaris-crimson hover:bg-velaris-crimson/10"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             </li>
           );
@@ -279,11 +297,15 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
                 <Label>Execution provider</Label>
                 <Select
                   value={draft.executionProvider}
+                  disabled={rosterFixed}
                   onValueChange={(v) =>
                     set("executionProvider", v as AgentConfiguration["executionProvider"])
                   }
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger
+                    className="w-full"
+                    aria-describedby={rosterFixed ? "agentExecutionProviderHint" : undefined}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -294,6 +316,12 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
                     ))}
                   </SelectContent>
                 </Select>
+                {rosterFixed ? (
+                  <p id="agentExecutionProviderHint" className="text-xs text-muted-foreground">
+                    The High Lord must stay on OpenCode — the Court&apos;s planning session depends
+                    on it.
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <Label>Approval policy</Label>

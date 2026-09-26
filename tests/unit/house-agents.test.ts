@@ -329,18 +329,43 @@ describe("agent service guards + audit", () => {
     expect(actions).toEqual(["create", "delete", "update"]);
   });
 
-  it("rejects agent CRUD on the High Lord house (422-class guard)", () => {
+  it("allows updating the High Lord's existing agent (model edit) but keeps the roster fixed", () => {
+    const db = getDb();
+    const hl = seedHighLordHouse(db)!;
+    const hlAgent = listAgentsForHouse(db, hl.id)[0];
+
+    // The existing agent IS editable — name…
+    const renamed = updateAgentService(db, hl.id, hlAgent.id, { name: "Y" });
+    expect(renamed.id).toBe(hlAgent.id);
+    expect(renamed.name).toBe("Y");
+
+    // …and its model, which persists.
+    const updated = updateAgentService(db, hl.id, hlAgent.id, {
+      configuration: { modelId: "highlord-model" },
+    });
+    expect(updated.configuration.modelId).toBe("highlord-model");
+    expect(listAgentsForHouse(db, hl.id)[0].configuration.modelId).toBe("highlord-model");
+    expect(getHouse(db, hl.id)!.configuration.modelId).toBe("highlord-model");
+
+    // …but the roster stays fixed: create/delete still throw.
+    expect(() =>
+      createAgentService(db, hl.id, { name: "X", role: "R", configuration: makeConfig() }),
+    ).toThrow(HighLordTransitionError);
+    expect(() => deleteAgentService(db, hl.id, hlAgent.id)).toThrow(HighLordTransitionError);
+  });
+
+  it("rejects switching the High Lord's agent to the Ollama runtime", () => {
     const db = getDb();
     const hl = seedHighLordHouse(db)!;
     const hlAgent = listAgentsForHouse(db, hl.id)[0];
 
     expect(() =>
-      createAgentService(db, hl.id, { name: "X", role: "R", configuration: makeConfig() }),
+      updateAgentService(db, hl.id, hlAgent.id, {
+        configuration: { executionProvider: "ollama" },
+      }),
     ).toThrow(HighLordTransitionError);
-    expect(() => updateAgentService(db, hl.id, hlAgent.id, { name: "Y" })).toThrow(
-      HighLordTransitionError,
-    );
-    expect(() => deleteAgentService(db, hl.id, hlAgent.id)).toThrow(HighLordTransitionError);
+    // Unchanged on disk.
+    expect(listAgentsForHouse(db, hl.id)[0].configuration.executionProvider).toBe("opencode");
   });
 
   it("service rejects deleting the last agent via LastAgentError", () => {

@@ -315,7 +315,9 @@ one agent remains the house default so all existing behavior is preserved.
 - New: `createAgent(db, houseId, input)`, `listAgentsForHouse(db, houseId)`,
   `getAgent(db, agentId)`, `updateAgent(db, agentId, patch)`, `deleteAgent(db, agentId)`
   (refuse delete when it is the house's last agent → new `LastAgentError` → 409; refuse for
-  `high_lord` houses → 422, reusing the High Lord guard convention).
+  `high_lord` houses → 422, reusing the High Lord guard convention). Later relaxed
+  (2026-09-27): the `high_lord` guard now covers only create/delete — the singleton
+  High Lord agent stays editable (PATCH → 200) so its model can be changed.
 - `seedHighLordHouse` unchanged (one agent).
 
 ### B.4 Runtime routing (the behavioral core)

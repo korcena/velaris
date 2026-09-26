@@ -10,7 +10,8 @@
  * Coverage:
  *  - GET/POST /api/houses/{id}/agents; PATCH/DELETE .../{agentId}
  *  - 201/200/204 happy paths; 400 zod / malformed JSON; 404 unknown house/agent;
- *    409 deleting the house's only agent; 422 agent CRUD on the High Lord.
+ *    409 deleting the house's only agent; 422 create/delete on the High Lord
+ *    (its existing agent PATCHes → 200, and an Ollama provider → 422).
  *  - task routing honoring agent_id + cross-house rejection.
  *  - audit rows written for agent CRUD.
  */
@@ -246,7 +247,7 @@ describe("agent CRUD routes", () => {
 /* ================================================================== */
 
 describe("agent CRUD on the High Lord house", () => {
-  it("rejects create/update/delete with 422", async () => {
+  async function seedHighLord(): Promise<{ hlId: string; agentId: string }> {
     // Bootstrapping via a house route seeds the High Lord.
     await createHouse();
     const hlRow = getRawDb()
@@ -254,6 +255,38 @@ describe("agent CRUD on the High Lord house", () => {
       .get() as { id: string } | undefined;
     expect(hlRow).toBeTruthy();
     const hlId = hlRow!.id;
+    const agentRow = getRawDb()
+      .prepare("SELECT id FROM agents WHERE house_id = ? LIMIT 1")
+      .get(hlId) as { id: string };
+    return { hlId, agentId: agentRow.id };
+  }
+
+  it("allows PATCHing the existing agent's model/name → 200 and persists", async () => {
+    const { hlId, agentId } = await seedHighLord();
+
+    const patched = await patchAgent(
+      jsonReq("PATCH", `${BASE}/api/houses/${hlId}/agents/${agentId}`, {
+        name: "High Lord",
+        configuration: { modelId: "highlord-model" },
+      }),
+      agentCtx(hlId, agentId),
+    );
+    expect(patched.status).toBe(200);
+
+    const detail = await getHouseById(req(`${BASE}/api/houses/${hlId}`), houseCtx(hlId));
+    expect(detail.status).toBe(200);
+    const { house } = (await detail.json()) as {
+      house: {
+        agents: Array<{ id: string; name: string; configuration: { modelId: string } }>;
+      };
+    };
+    const hlAgent = house.agents.find((a) => a.id === agentId)!;
+    expect(hlAgent.name).toBe("High Lord");
+    expect(hlAgent.configuration.modelId).toBe("highlord-model");
+  });
+
+  it("rejects create/delete and an Ollama execution provider with 422", async () => {
+    const { hlId, agentId } = await seedHighLord();
 
     const created = await createAgentRoute(
       jsonReq("POST", `${BASE}/api/houses/${hlId}/agents`, agentPayload("Intruder")),
@@ -261,20 +294,22 @@ describe("agent CRUD on the High Lord house", () => {
     );
     expect(created.status).toBe(422);
 
-    const agentRow = getRawDb()
-      .prepare("SELECT id FROM agents WHERE house_id = ? LIMIT 1")
-      .get(hlId) as { id: string };
-    const patched = await patchAgent(
-      jsonReq("PATCH", `${BASE}/api/houses/${hlId}/agents/${agentRow.id}`, { name: "X" }),
-      agentCtx(hlId, agentRow.id),
-    );
-    expect(patched.status).toBe(422);
-
     const deleted = await deleteAgentRoute(
-      req(`${BASE}/api/houses/${hlId}/agents/${agentRow.id}`, { method: "DELETE" }),
-      agentCtx(hlId, agentRow.id),
+      req(`${BASE}/api/houses/${hlId}/agents/${agentId}`, { method: "DELETE" }),
+      agentCtx(hlId, agentId),
     );
     expect(deleted.status).toBe(422);
+
+    const ollama = await patchAgent(
+      jsonReq("PATCH", `${BASE}/api/houses/${hlId}/agents/${agentId}`, {
+        configuration: { executionProvider: "ollama" },
+      }),
+      agentCtx(hlId, agentId),
+    );
+    expect(ollama.status).toBe(422);
+    expect(((await ollama.json()) as { error: string }).error).toMatch(
+      /planning session requires OpenCode/i,
+    );
   });
 });
 

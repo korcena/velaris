@@ -60,6 +60,25 @@ export class HighLordTransitionError extends Error {
   }
 }
 
+/**
+ * Reject switching a `high_lord` house's configuration (or its agent's) to the
+ * Ollama runtime (Phase 5 Q9): the Court's planning + steering require OpenCode
+ * (`getSession`/`listMessages`). No-op unless the caller is actually setting
+ * `executionProvider='ollama'`.
+ */
+function rejectHighLordOllama(
+  db: VelarisDb,
+  houseId: string,
+  executionProvider: unknown,
+): void {
+  if (executionProvider !== "ollama") return;
+  if (getHouse(db, houseId)?.kind === "high_lord") {
+    throw new HighLordTransitionError(
+      "The Court's planning session requires OpenCode — the High Lord cannot use the Ollama runtime",
+    );
+  }
+}
+
 /** Parse & create. Throws ZodError (→ 400) or repo errors (→ 409 handled in route). */
 export function createHouseService(db: VelarisDb, input: unknown): HouseDto {
   const parsed = houseCreateSchema.parse(input); // ZodError bubble → route maps to 400
@@ -90,14 +109,7 @@ export function updateHouseService(db: VelarisDb, id: string, input: unknown): H
   // (getSession/listMessages), so it must never run on the Ollama runtime. Reject
   // a PATCH that would set executionProvider='ollama' on a high_lord house with
   // 422. Only thrown when the patch would actually make that change.
-  if (configPatch?.executionProvider === "ollama") {
-    const existing = getHouse(db, id);
-    if (existing?.kind === "high_lord") {
-      throw new HighLordTransitionError(
-        "The Court's planning session requires OpenCode — the High Lord cannot use the Ollama runtime",
-      );
-    }
-  }
+  rejectHighLordOllama(db, id, configPatch?.executionProvider);
   const patch = {
     name: parsed.name,
     description: parsed.description,
@@ -193,12 +205,15 @@ export function houseHasTasksService(db: VelarisDb, id: string): boolean {
 /* ---------------------- Agent CRUD (Phase 6 Stage B) ---------------- */
 
 /**
- * The High Lord's agent roster is fixed to its single orchestrator (Rhysand):
- * the Court depends on that agent's OpenCode planning path, and the house is a
- * seeded singleton. Reject any agent create/update/delete on a high_lord house
- * (422 via HighLordTransitionError), mirroring the house-level guard.
+ * The High Lord's agent ROSTER is fixed to its single orchestrator (Rhysand):
+ * the house is a seeded singleton, so agents cannot be added to or removed
+ * from it. The existing agent stays editable (model/name/role) via
+ * `updateAgentService`; only `executionProvider='ollama'` is rejected there,
+ * because the Court depends on that agent's OpenCode planning path. Rejects
+ * create/delete on a high_lord house (422 via HighLordTransitionError),
+ * mirroring the house-level guard.
  */
-function guardHighLordAgents(db: VelarisDb, houseId: string): void {
+function guardHighLordRoster(db: VelarisDb, houseId: string): void {
   const house = getHouse(db, houseId);
   if (!house) throw new HouseNotFoundError(houseId);
   if (house.kind === "high_lord") {
@@ -219,7 +234,7 @@ export function createAgentService(
   input: unknown,
 ): HouseAgentDto {
   const parsed = houseAgentCreateSchema.parse(input);
-  guardHighLordAgents(db, houseId);
+  guardHighLordRoster(db, houseId);
   const agent = repoCreateAgent(db, houseId, {
     name: parsed.name,
     role: parsed.role,
@@ -245,7 +260,12 @@ export function updateAgentService(
   input: unknown,
 ): HouseAgentDto {
   const parsed = houseAgentUpdateSchema.parse(input);
-  guardHighLordAgents(db, houseId);
+  // The High Lord's existing agent is editable, but its Court planning path
+  // requires OpenCode: reject a patch that would switch it to the Ollama
+  // runtime (mirrors updateHouseService). Only thrown when the patch actually
+  // sets executionProvider='ollama'.
+  const configPatch = parsed.configuration as Partial<HouseConfiguration> | undefined;
+  rejectHighLordOllama(db, houseId, configPatch?.executionProvider);
   // Ensure the agent exists AND belongs to this house (prevents cross-house
   // mutation via a mismatched path).
   const existing = repoGetAgent(db, agentId);
@@ -276,7 +296,7 @@ export function updateAgentService(
 }
 
 export function deleteAgentService(db: VelarisDb, houseId: string, agentId: string): void {
-  guardHighLordAgents(db, houseId);
+  guardHighLordRoster(db, houseId);
   const existing = repoGetAgent(db, agentId);
   if (!existing || !listAgentsForHouse(db, houseId).some((a) => a.id === agentId)) {
     throw new AgentNotFoundError(agentId);
