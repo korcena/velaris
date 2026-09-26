@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("seedHighLordHouse", () => {
-  it("seeds the singleton High Lord with kind + seed values (glm-5.3, never, Rhysand)", () => {
+  it("seeds the singleton High Lord with kind + seed values (deepseek-v4.1-flash, never, Rhysand)", () => {
     const db = getDb();
     const hl = seedHighLordHouse(db);
 
@@ -74,7 +74,7 @@ describe("seedHighLordHouse", () => {
     expect(hl?.status).toBe("active");
     expect(hl?.agent.name).toBe(HIGH_LORD_SEED.AGENT_NAME);
     expect(hl?.agent.role).toBe(HIGH_LORD_SEED.AGENT_ROLE);
-    expect(hl?.configuration.modelId).toBe("glm-5.3");
+    expect(hl?.configuration.modelId).toBe("deepseek-v4.1-flash");
     expect(hl?.configuration.approvalPolicy).toBe("never");
     expect(hl?.configuration.executionProvider).toBe("opencode");
     expect(hl?.configuration.systemPrompt).toBe(HIGH_LORD_SEED.SYSTEM_PROMPT);
@@ -88,7 +88,7 @@ describe("seedHighLordHouse", () => {
     // Simulate a user editing the model via the standard house form.
     updateHouseService(db, hl.id, { configuration: { modelId: "llama-4" } });
 
-    // Re-seed (e.g. next boot) — must not resurrect glm-5.3.
+    // Re-seed (e.g. next boot) — must not resurrect deepseek-v4.1-flash.
     seedHighLordHouse(getRawDb());
     expect(findHighLordHouse(db)?.configuration.modelId).toBe("llama-4");
     expect(listHouses(db, { includeHighLord: true })).toHaveLength(1);

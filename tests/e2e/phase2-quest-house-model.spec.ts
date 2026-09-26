@@ -173,33 +173,46 @@ test.describe("House detail page (activity + chat + approvals)", () => {
   });
 });
 
-test.describe("Model picker fallback (engine off)", () => {
+test.describe("Model field (picker or manual fallback)", () => {
   test("model field accepts a manual value whether a picker shows or not", async ({ page }) => {
     await page.goto("/houses");
     await page.getByRole("button", { name: "New house" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
 
-    // Execution tab → Model field. When OpenCode is unreachable (as in e2e)
-    // it falls back to a text input with the offline hint.
+    // Execution tab → Model field. The form queries /api/models on mount: if a
+    // local OpenCode server answers with models it renders a select picker;
+    // otherwise it falls back to a free-text input with the offline hint.
     await dialog.getByRole("tab", { name: "Execution" }).click();
 
-    // Accept EITHER state: a select picker (if a local OpenCode server is up) or
-    // the text-input fallback with the offline hint. Fill a model value either way.
-    const fallback = dialog.getByLabel("Model", { exact: true });
-    const selectTrigger = dialog.locator("#modelId");
-    const fallbackVisible = await fallback.isVisible().catch(() => false);
-    const selectVisible = await selectTrigger.isVisible().catch(() => false);
+    // The two controls are unambiguously distinct by element type + id:
+    // a <button id="modelId" role="combobox"> picker, or an <input id="modelId">.
+    // (getByLabel("Model") matches BOTH because the label's `htmlFor` targets the
+    // same id in either state — which made the old test fill() a button.)
+    const picker = dialog.locator('button#modelId[role="combobox"]');
+    const manual = dialog.locator("input#modelId");
 
-    if (fallbackVisible) {
-      await fallback.fill("glm-5.3");
-      await expect(fallback).toHaveValue("glm-5.3");
-    } else if (selectVisible) {
-      await selectTrigger.click();
-      await dialog.getByRole("option", { name: /glm|opencode|model/i }).first().click();
+    // Wait for the model query to settle. While loading, neither the picker's
+    // "Current value:" line nor the offline hint is present, so requiring one of
+    // them removes the loading race before we branch.
+    const pickerReady = dialog.getByText(/Current value:/i);
+    const offlineHint = dialog.getByText(/OpenCode server offline/i);
+    await expect(pickerReady.or(offlineHint)).toBeVisible();
+
+    if (await picker.isVisible().catch(() => false)) {
+      // Picker branch: the field is interactive and its value is settable.
+      await picker.click();
+      const option = page.getByRole("option").first();
+      await expect(option).toBeVisible();
+      const modelLabel = (await option.textContent())!.trim();
+      await option.click();
+      // Radix renders the selected item's label inside the trigger.
+      await expect(picker).toContainText(modelLabel);
     } else {
-      // Neither input is interactive — at least assert the section rendered.
-      await expect(dialog.getByText(/Model/i)).toBeVisible();
+      // Text-fallback branch: fill a manual value and assert it sticks.
+      await expect(manual).toBeVisible();
+      await manual.fill("deepseek-v4.1-flash");
+      await expect(manual).toHaveValue("deepseek-v4.1-flash");
     }
 
     await dialog.getByRole("button", { name: "Cancel" }).click();

@@ -333,7 +333,7 @@ export function HouseAgentsPanel({ houseId, agents, onChanged }: Props) {
                   id="agentModelId"
                   value={draft.modelId}
                   onChange={(e) => set("modelId", e.target.value)}
-                  placeholder="glm-5.3"
+                  placeholder="deepseek-v4.1-flash"
                 />
               </div>
             </div>

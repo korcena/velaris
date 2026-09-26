@@ -131,7 +131,7 @@ describe("houseCreateSchema", () => {
     const out = houseCreateSchema.parse(minimalHouseCreate);
     expect(out.description).toBe("");
     expect(out.configuration.aiProvider).toBe("ollama-cloud");
-    expect(out.configuration.modelId).toBe("");
+    expect(out.configuration.modelId).toBe("deepseek-v4.1-flash");
     expect(out.configuration.workspaceAllowlist).toEqual([]);
     expect(out.configuration.tools).toEqual([]);
     expect(out.configuration.approvalPolicy).toBe("always");

@@ -259,7 +259,7 @@ export const HIGH_LORD_SEED = {
   CONFIGURATION: {
     executionProvider: "opencode",
     aiProvider: "ollama-cloud",
-    modelId: "glm-5.3",
+    modelId: "deepseek-v4.1-flash",
     approvalPolicy: "never", // auto-approve so a planning call never blocks
     concurrency: 1,
   } as const,
@@ -378,7 +378,7 @@ export const AUDIT_ENTITY_TYPES: readonly AuditEntityType[] = [
 
 /** Default OpenCode-provider IDs & model hints (never hardcoded at runtime; advisory only). */
 export const DEFAULT_AI_PROVIDER = "ollama-cloud";
-export const DEFAULT_MODEL_ID = "";
+export const DEFAULT_MODEL_ID = "deepseek-v4.1-flash";
 
 /* ------------------------------------------------------------------ */
 /* Default houses (single source of truth)                            */
@@ -684,7 +684,7 @@ const STANDARD_REPO_TEMPLATE: DefaultTemplate = {
   description: "A conventional repository project (directory supplied at instantiation).",
   payload: {
     description: "Standard repository project.",
-    defaultModel: "glm-5.3",
+    defaultModel: "deepseek-v4.1-flash",
     instructions:
       "Read the repository conventions before editing; keep changes focused and run the test suite.",
   },

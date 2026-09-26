@@ -41,6 +41,7 @@ import {
   EXECUTION_PROVIDERS,
   APPROVAL_POLICIES,
   PERMISSION_MODES,
+  DEFAULT_MODEL_ID,
 } from "@/shared/constants";
 import type { HouseDto, HouseStatus } from "@/shared/types";
 
@@ -112,7 +113,7 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
             systemPrompt: "",
             executionProvider: "opencode",
             aiProvider: "ollama-cloud",
-            modelId: "",
+            modelId: DEFAULT_MODEL_ID,
             workspaceAllowlist: [],
             tools: [],
             permissions: {
@@ -403,7 +404,7 @@ export function HouseForm({ open, onOpenChange, existing, onSaved }: Props) {
                       <Input
                         id="modelId"
                         {...register("configuration.modelId")}
-                        placeholder="e.g. glm-5.3"
+                        placeholder="e.g. deepseek-v4.1-flash"
                       />
                       {modelsLoading ? (
                         <p className="text-xs text-muted-foreground">Querying the engine…</p>

@@ -42,7 +42,7 @@ test.describe("House detail panel (Phase 3)", () => {
     ).json()).houses as { id: string; name: string }[];
     const ph = houses.find((h) => h.name === "Panel House")!;
 
-    // The form leaves modelId empty; set it so the Overview card shows it.
+    // Set an explicit model so the Overview card shows a known value.
     await request.patch(`/api/houses/${ph.id}`, {
       data: { configuration: { modelId: "glm-5.3", aiProvider: "ollama-cloud" } },
       headers: { "Content-Type": "application/json" },
