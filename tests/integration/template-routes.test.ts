@@ -239,7 +239,7 @@ describe("template instantiation route", () => {
     const { templates } = (await list.json()) as {
       templates: Array<{ id: string; name: string; isSeeded: boolean }>;
     };
-    const seeded = templates.find((t) => t.name === "Engineering House")!;
+    const seeded = templates.find((t) => t.name === "Day Court")!;
     expect(seeded).toBeTruthy();
 
     const res = await instantiateRoute(
@@ -257,9 +257,9 @@ describe("template instantiation route", () => {
       };
     };
     expect(house.name).toBe("My Engineering");
-    expect(house.agent.name).toBe("Engineer");
+    expect(house.agent.name).toBe("Helion");
     expect(house.configuration.executionProvider).toBe("opencode");
-    expect(house.configuration.modelId).toBe("glm-5.3");
+    expect(house.configuration.modelId).toBe("deepseek-v4.1-flash");
     expect(house.configuration.approvalPolicy).toBe("risky_only");
     expect(house.agents).toHaveLength(1);
 

@@ -21,6 +21,7 @@ import { rawDb } from "@/lib/db";
 import { templates } from "@/lib/db/schema";
 import { DEFAULT_TEMPLATES } from "@/shared/constants";
 import { parseJson } from "@/shared/schemas/common";
+import { houseTemplatePayloadSchema } from "@/shared/schemas/template";
 import type {
   TemplateDto,
   TemplateKind,
@@ -202,7 +203,26 @@ export function deleteTemplate(db: VelarisDb, id: string): void {
 /**
  * Idempotent seed of the default house/project templates: inserts only when no
  * row with the same (kind, name) exists, so it NEVER clobbers user edits or a
- * previously seeded row. Returns the number inserted.
+ * previously seeded row.
+ *
+ * DESTRUCTIVE CLEANUP SIDE EFFECT: after the insert loop, this removes seeded
+ * house templates no longer in the current default set (e.g. the superseded
+ * `Research House` / `Engineering House` / `Docs House`). Returns the number
+ * INSERTED; the number of rows deleted is not reported.
+ *
+ * Cleanup keying (resolved plan Q3/Q4): `is_seeded = 1 AND kind = 'house' AND
+ * name NOT IN (<current default house names>)`. It can never delete a
+ * user-created template (`is_seeded = 0`) or a project template
+ * (`kind = 'project'`). Runs AFTER the insert loop so an interrupted seed can
+ * never leave the user with zero house templates.
+ *
+ * An EMPTY default house set makes cleanup a NO-OP: with no default house names
+ * to key on, no DELETE is issued, so stale seeded house templates are NOT
+ * garbage-collected (safe, but never removed until defaults exist again).
+ *
+ * Each derived house payload is parsed by `houseTemplatePayloadSchema` before
+ * insert, so a malformed derivation fails loudly at boot instead of writing a
+ * payload that bypasses the service-boundary zod validation.
  *
  * Called on boot by web + engine. Accepts either the Drizzle wrapper or the raw
  * connection so the (raw) engine process can call it too.
@@ -217,12 +237,40 @@ export function seedDefaultTemplates(db: VelarisDb | Database.Database): number 
      VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
   );
 
-  let inserted = 0;
+  // Check+insert (and the cleanup) run inside an IMMEDIATE transaction so
+  // concurrent web + engine boots cannot both pass the existence check and
+  // double-insert — the second would violate the unique (kind,name) index and
+  // throw (plan §8/Q6; mirrors seedDefaultHouses). The write lock is taken up
+  // front; busy_timeout=5000 is already set on the connection.
+  const houseNames = DEFAULT_TEMPLATES.filter((t) => t.kind === "house").map((t) => t.name);
   const now = new Date().toISOString();
-  for (const t of DEFAULT_TEMPLATES) {
-    if (exists.get(t.kind, t.name)) continue;
-    insert.run(randomUUID(), t.kind, t.name, t.description, JSON.stringify(t.payload), now, now);
-    inserted += 1;
-  }
-  return inserted;
+
+  return raw
+    .transaction(() => {
+      let inserted = 0;
+      for (const t of DEFAULT_TEMPLATES) {
+        if (exists.get(t.kind, t.name)) continue;
+        // Boot-time guard: the seed bypasses the service validation boundary, so
+        // validate a derived house payload here (loud failure beats a bad row).
+        const payload =
+          t.kind === "house" ? houseTemplatePayloadSchema.parse(t.payload) : t.payload;
+        insert.run(randomUUID(), t.kind, t.name, t.description, JSON.stringify(payload), now, now);
+        inserted += 1;
+      }
+
+      // Insert-then-clean: drop seeded house templates absent from the current
+      // default set. User templates and project templates are never touched.
+      if (houseNames.length) {
+        const placeholders = houseNames.map(() => "?").join(",");
+        raw
+          .prepare(
+            `DELETE FROM templates
+              WHERE is_seeded = 1 AND kind = 'house' AND name NOT IN (${placeholders})`,
+          )
+          .run(...houseNames);
+      }
+
+      return inserted;
+    })
+    .immediate();
 }

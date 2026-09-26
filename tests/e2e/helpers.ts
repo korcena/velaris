@@ -26,6 +26,11 @@ export async function navigate(page: Page, name: string): Promise<void> {
   await page.getByRole("link", { name: new RegExp(name) }).first().click();
 }
 
+/** The card element for a house by its exact name (grid is newest-first). */
+export function houseCard(page: Page, name: string) {
+  return page.locator('[data-slot="card"]').filter({ hasText: name }).first();
+}
+
 /**
  * Create a house through the UI (the §5.6 smoke journey form).
  * Fills Identity + Agent tabs; the other tabs keep their defaults.

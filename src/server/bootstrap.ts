@@ -8,7 +8,7 @@
 import { migrate } from "@/lib/db/migrate";
 import { getDb, getRawDb } from "@/lib/db";
 import { seedDefaultProviderConfigs } from "@/server/repositories/provider-config-repo";
-import { seedHighLordHouse } from "@/server/repositories/house-repo";
+import { seedHighLordHouse, seedDefaultHouses } from "@/server/repositories/house-repo";
 import { seedDefaultTemplates } from "@/server/repositories/template-repo";
 
 let _done = false;
@@ -19,6 +19,9 @@ export function bootstrapDb(): void {
   seedDefaultProviderConfigs(getRawDb());
   // Seed the singleton High Lord house (idempotent; never clobbers user edits).
   seedHighLordHouse(getRawDb());
+  // Seed the ten default ACOTAR houses (idempotent, no-clobber by exact name;
+  // never renames/merges/deletes an existing house).
+  seedDefaultHouses(getRawDb());
   // Seed the default house/project templates (idempotent by (kind,name);
   // seeded rows are immutable so user edits are never clobbered).
   seedDefaultTemplates(getRawDb());

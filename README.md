@@ -30,6 +30,33 @@ and MVP acceptance journey.
 - **Found houses** — create AI agents with full configuration: identity, system prompt,
   execution provider, model, workspace allowlist, tools, permissions, approval policy,
   concurrency. Enable, disable, or archive them.
+- **Meet the ten default houses** — the first boot seeds ten ACOTAR-named houses, one agent
+  each, ready for the roles you need day to day:
+
+  | House | Agent | Function |
+  |---|---|---|
+  | Day Court | Helion | Software developer |
+  | House of Shadow | Azriel | Software tester |
+  | Hewn City | Amren | Software reviewer |
+  | The Library | Clotho | Documentation |
+  | Court of Truth | Morrigan | Analysis |
+  | The Townhouse | Nuala | Admin / secretary |
+  | Summer Court | Tarquin | Finance / auditor |
+  | Windhaven | Gwyn | Research |
+  | The Crossing | Lucien | Communications |
+  | Illyria | Cassian | Operations / DevOps |
+
+  Each ships with a role-specific system prompt and a tuned permission posture (only the
+  developer, tester, and operations houses may run shell commands). Seeding is idempotent and
+  never clobbers your edits: a house is only created when no house with that exact name
+  exists, so reconfiguring a seeded house in place is preserved on every later boot. Note
+  that **renaming** a seeded house means its original default name becomes absent and is
+  re-created on a later boot — your renamed house is preserved, and a fresh default is added
+  alongside it. The same roster is also available as immutable house templates (10 house
+  templates + the `Standard Repo` project template), so an accidental delete or a bad edit is
+  recoverable.
+  The superseded seeded house templates (`Research House`, `Engineering House`, `Docs House`)
+  are cleaned up once on boot; user-created and project templates are never deleted.
 - **Post quests** — register project directories (git info auto-detected), create typed
   tasks, and assign them directly to a house.
 - **Watch real execution** — the engine process claims queued tasks and runs them through the
@@ -83,8 +110,9 @@ cp .env.example .env.local   # adjust paths/ports if needed
 npm run dev                  # web (:3000) + Velaris Engine together
 ```
 
-Both processes auto-apply migrations and seed default provider configs on boot, so
-`db:migrate` is optional in development. Open the app at `http://localhost:3000`.
+Both processes auto-apply migrations and seed defaults on boot — default provider configs,
+the High Lord, the ten default houses, and the house/project templates — so `db:migrate` is
+optional in development. Open the app at `http://localhost:3000`.
 
 Key environment variables (see `.env.example`): `VELARIS_DB_PATH` (SQLite file, default
 `./db/velaris.db`), `VELARIS_PORT`, `OPENCODE_BASE_URL` (default `http://127.0.0.1:4096`),

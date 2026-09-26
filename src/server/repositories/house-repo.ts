@@ -16,7 +16,7 @@ import type { VelarisDb } from "@/lib/db";
 import { rawDb } from "@/lib/db";
 import { houses, agents, agentConfigurations } from "@/lib/db/schema";
 import { parseJson } from "@/shared/schemas/common";
-import { HIGH_LORD_SEED } from "@/shared/constants";
+import { HIGH_LORD_SEED, DEFAULT_HOUSES } from "@/shared/constants";
 import type {
   HouseDto,
   HouseStatus,
@@ -26,6 +26,7 @@ import type {
   HouseAgentDto,
   HouseConfiguration,
 } from "@/shared/types";
+import type { DefaultHouse } from "@/shared/constants";
 
 /* ------------------------------ Errors ------------------------------ */
 
@@ -609,66 +610,164 @@ export function seedHighLordHouse(
   const raw: Database.Database =
     "$client" in db ? rawDb(db as VelarisDb) : (db as Database.Database);
 
-  const existing = raw
-    .prepare(`SELECT id FROM houses WHERE kind = 'high_lord' LIMIT 1`)
-    .get() as { id: string } | undefined;
-  if (existing) {
-    // Already seeded — return the existing DTO (via the wrapper if available).
-    return "$client" in db ? houseRowToDto(db as VelarisDb, existing.id) : null;
-  }
-
   const houseId = randomUUID();
   const agentId = randomUUID();
   const configId = randomUUID();
   const config = HIGH_LORD_SEED.CONFIGURATION;
 
-  // Insert the house + agent + configuration in one transaction (idempotent by
-  // the kind='high_lord' existence check above — never clobbers user edits).
+  // Check+insert run inside one IMMEDIATE transaction (symmetric with
+  // seedDefaultHouses / seedDefaultTemplates) so concurrent web + engine first
+  // boots cannot both pass the existence check and insert two High Lords. The
+  // write lock is taken up front; busy_timeout=5000 is already set on the
+  // connection. Idempotent by kind='high_lord' — never clobbers user edits.
+  const { id } = raw
+    .transaction(() => {
+      const existing = raw
+        .prepare(`SELECT id FROM houses WHERE kind = 'high_lord' LIMIT 1`)
+        .get() as { id: string } | undefined;
+      if (existing) return { id: existing.id };
+
+      raw
+        .prepare(
+          `INSERT INTO houses (id, name, description, kind, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'high_lord', 'active', ?, ?)`,
+        )
+        .run(
+          houseId,
+          HIGH_LORD_SEED.HOUSE_NAME,
+          HIGH_LORD_SEED.HOUSE_DESCRIPTION,
+          new Date().toISOString(),
+          new Date().toISOString(),
+        );
+      raw
+        .prepare(
+          `INSERT INTO agents (id, house_id, name, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          agentId,
+          houseId,
+          HIGH_LORD_SEED.AGENT_NAME,
+          HIGH_LORD_SEED.AGENT_ROLE,
+          new Date().toISOString(),
+          new Date().toISOString(),
+        );
+      raw
+        .prepare(
+          `INSERT INTO agent_configurations
+             (id, agent_id, system_prompt, execution_provider, ai_provider, model_id,
+              workspace_allowlist, tools, permissions, approval_policy, concurrency, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '{}', ?, ?, ?, ?)`,
+        )
+        .run(
+          configId,
+          agentId,
+          HIGH_LORD_SEED.SYSTEM_PROMPT,
+          config.executionProvider,
+          config.aiProvider,
+          config.modelId,
+          config.approvalPolicy,
+          config.concurrency,
+          new Date().toISOString(),
+          new Date().toISOString(),
+        );
+
+      return { id: houseId };
+    })
+    .immediate();
+
+  return "$client" in db ? houseRowToDto(db as VelarisDb, id) : null;
+}
+
+/* ------------------------ Default houses (ACOTAR) ------------------- */
+
+/**
+ * Insert one default house + its agent + its configuration as raw prepared
+ * INSERTs (mirrors seedHighLordHouse). `kind='agent'`, `status='active'`, and
+ * all JSON columns stringified exactly as `createHouse` does. No audit: this is
+ * a boot seed, not a user action.
+ */
+function insertDefaultHouse(raw: Database.Database, entry: DefaultHouse): void {
+  const houseId = randomUUID();
+  const agentId = randomUUID();
+  const configId = randomUUID();
+  const now = new Date().toISOString();
+  const config = entry.configuration;
+
   raw
     .prepare(
       `INSERT INTO houses (id, name, description, kind, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'high_lord', 'active', ?, ?)`,
+       VALUES (?, ?, ?, 'agent', 'active', ?, ?)`,
     )
-    .run(
-      houseId,
-      HIGH_LORD_SEED.HOUSE_NAME,
-      HIGH_LORD_SEED.HOUSE_DESCRIPTION,
-      new Date().toISOString(),
-      new Date().toISOString(),
-    );
+    .run(houseId, entry.house.name, entry.house.description, now, now);
+
   raw
     .prepare(
       `INSERT INTO agents (id, house_id, name, role, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(
-      agentId,
-      houseId,
-      HIGH_LORD_SEED.AGENT_NAME,
-      HIGH_LORD_SEED.AGENT_ROLE,
-      new Date().toISOString(),
-      new Date().toISOString(),
-    );
+    .run(agentId, houseId, entry.agent.name, entry.agent.role, now, now);
+
   raw
     .prepare(
       `INSERT INTO agent_configurations
          (id, agent_id, system_prompt, execution_provider, ai_provider, model_id,
           workspace_allowlist, tools, permissions, approval_policy, concurrency, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '{}', ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       configId,
       agentId,
-      HIGH_LORD_SEED.SYSTEM_PROMPT,
+      config.systemPrompt,
       config.executionProvider,
       config.aiProvider,
       config.modelId,
+      JSON.stringify(config.workspaceAllowlist ?? []),
+      JSON.stringify(config.tools ?? []),
+      JSON.stringify(config.permissions ?? {}),
       config.approvalPolicy,
       config.concurrency,
-      new Date().toISOString(),
-      new Date().toISOString(),
+      now,
+      now,
     );
+}
 
-  return "$client" in db ? houseRowToDto(db as VelarisDb, houseId) : null;
+/**
+ * Idempotent, no-clobber seed of the ten default ACOTAR houses — one agent and
+ * one complete configuration each. A default is inserted only when NO house row
+ * (any kind/status) already has that exact name; an existing same-named house is
+ * skipped untouched (never renamed, merged, or deleted). Returns the number
+ * inserted.
+ *
+ * Matching is by EXACT name, so renaming a seeded house makes its original
+ * default name look absent: the next boot re-creates the default, leaving the
+ * renamed house AND a fresh default. Reconfiguring a seeded house in place is
+ * preserved (its name is unchanged, so the default stays skipped). Documented
+ * behaviour; no seed marker is used (the frozen design forbids a schema change).
+ *
+ * Each entry's existence check + insert runs inside an IMMEDIATE transaction so
+ * concurrent web + engine boots cannot both pass the check and double-insert
+ * (the write lock is taken up front; busy_timeout=5000 is already set on the
+ * connection). Accepts either the Drizzle wrapper or the raw connection, like
+ * seedHighLordHouse, so both processes share one code path.
+ */
+export function seedDefaultHouses(db: VelarisDb | Database.Database): number {
+  const raw: Database.Database =
+    "$client" in db ? rawDb(db as VelarisDb) : (db as Database.Database);
+
+  const exists = raw.prepare(`SELECT id FROM houses WHERE name = ? LIMIT 1`);
+
+  let inserted = 0;
+  for (const entry of DEFAULT_HOUSES) {
+    const didInsert = raw
+      .transaction(() => {
+        if (exists.get(entry.house.name)) return false;
+        insertDefaultHouse(raw, entry);
+        return true;
+      })
+      .immediate();
+    if (didInsert) inserted += 1;
+  }
+  return inserted;
 }
 

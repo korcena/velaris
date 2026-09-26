@@ -46,6 +46,7 @@ import {
   templateUpdateSchema,
   templateListQuerySchema,
   templateInstantiateSchema,
+  houseTemplatePayloadSchema,
 } from "@/shared/schemas/template";
 import {
   archiveQuerySchema,
@@ -60,7 +61,7 @@ import {
   USAGE_DEFAULT_TASK_LIMIT,
   USAGE_MAX_TASK_LIMIT,
 } from "@/shared/schemas/usage";
-import { TEMPLATE_KINDS, DEFAULT_TEMPLATES } from "@/shared/constants";
+import { TEMPLATE_KINDS, DEFAULT_TEMPLATES, DEFAULT_HOUSES } from "@/shared/constants";
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -896,6 +897,17 @@ describe("template schemas (Phase 6 Stage C)", () => {
     expect(DEFAULT_TEMPLATES.length).toBeGreaterThan(0);
     expect(DEFAULT_TEMPLATES.some((t) => t.kind === "house")).toBe(true);
     expect(DEFAULT_TEMPLATES.some((t) => t.kind === "project")).toBe(true);
+  });
+
+  it("every DEFAULT_TEMPLATES house payload parses under houseTemplatePayloadSchema (.strict())", () => {
+    const houseTemplates = DEFAULT_TEMPLATES.filter((t) => t.kind === "house");
+    // The ten derived house templates, one per DEFAULT_HOUSES entry.
+    expect(houseTemplates).toHaveLength(DEFAULT_HOUSES.length);
+    for (const t of houseTemplates) {
+      const parsed = houseTemplatePayloadSchema.parse(t.payload);
+      expect(parsed.agent.name).toBeTruthy();
+      expect(Object.keys(parsed).sort()).toEqual(["agent", "configuration", "description"]);
+    }
   });
 
   it("parses a house template create (no name in payload) and a project one", () => {

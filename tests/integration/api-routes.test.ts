@@ -24,6 +24,7 @@ import { NextRequest } from "next/server";
 
 import { resetDbForTests, getRawDb } from "@/lib/db";
 import { resetBootstrapForTests } from "@/server/bootstrap";
+import { DEFAULT_HOUSES } from "@/shared/constants";
 
 import { GET as getHealth } from "@/app/api/health/route";
 import { GET as listHouses, POST as createHouseRoute } from "@/app/api/houses/route";
@@ -262,12 +263,21 @@ describe("POST /api/houses", () => {
 
 describe("GET /api/houses", () => {
   it("lists houses → 200 {houses: [...]}", async () => {
-    await createHouse();
+    const { id } = await createHouse();
     const res = await listHouses(req(`${BASE}/api/houses`));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.houses).toHaveLength(1);
-    expect(body.houses[0].name).toBe("House of Shadows");
+    // Boot seeds the ten default ACOTAR houses, so the list is those plus the
+    // created house; assert the created one is present and fully shaped rather
+    // than a stale "empty grid" count.
+    expect(body.houses.length).toBe(DEFAULT_HOUSES.length + 1);
+    expect(body.houses.some((h: { id: string }) => h.id === id)).toBe(true);
+    const created = body.houses.find((h: { id: string }) => h.id === id);
+    expect(created.name).toBe("House of Shadows");
+    // All ten seeded defaults are listed too.
+    for (const h of DEFAULT_HOUSES) {
+      expect(body.houses.some((x: { name: string }) => x.name === h.house.name)).toBe(true);
+    }
   });
 
   it("excludes archived by default; includeArchived=true shows them", async () => {
@@ -275,13 +285,17 @@ describe("GET /api/houses", () => {
     await patchHouse(jsonReq("PATCH", `${BASE}/api/houses/${id}`, { status: "archived" }), idCtx(id));
 
     const hidden = await (await listHouses(req(`${BASE}/api/houses`))).json();
-    expect(hidden.houses).toHaveLength(0);
+    // The archived house is hidden; the ten seeded defaults remain.
+    expect(hidden.houses.some((h: { id: string }) => h.id === id)).toBe(false);
+    expect(hidden.houses).toHaveLength(DEFAULT_HOUSES.length);
 
     const all = await (
       await listHouses(req(`${BASE}/api/houses?includeArchived=true`))
     ).json();
-    expect(all.houses).toHaveLength(1);
-    expect(all.houses[0].status).toBe("archived");
+    expect(all.houses.some((h: { id: string }) => h.id === id)).toBe(true);
+    expect(all.houses).toHaveLength(DEFAULT_HOUSES.length + 1);
+    const archived = all.houses.find((h: { id: string }) => h.id === id);
+    expect(archived.status).toBe("archived");
   });
 });
 

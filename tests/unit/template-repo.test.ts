@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getDb, resetDbForTests } from "@/lib/db";
+import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
 import {
   createTemplate,
@@ -36,7 +36,8 @@ import {
 import { listHouses, getHouse } from "@/server/repositories/house-repo";
 import { listProjects } from "@/server/repositories/project-repo";
 import { listAuditLog } from "@/server/repositories/audit-repo";
-import { DEFAULT_TEMPLATES } from "@/shared/constants";
+import { DEFAULT_TEMPLATES, DEFAULT_HOUSES } from "@/shared/constants";
+import { houseTemplatePayloadSchema } from "@/shared/schemas/template";
 import type { HouseTemplatePayload, ProjectTemplatePayload } from "@/shared/types";
 
 let tmpDir: string;
@@ -195,7 +196,7 @@ describe("seedDefaultTemplates", () => {
     const db = getDb();
     const t = createTemplate(db, {
       kind: "house",
-      name: "Research House",
+      name: "Day Court",
       description: "my custom version",
       payload: housePayload({ description: "custom" }),
     });
@@ -204,8 +205,10 @@ describe("seedDefaultTemplates", () => {
     const still = getTemplate(db, t.id)!;
     expect(still.description).toBe("my custom version");
     expect((still.payload as HouseTemplatePayload).description).toBe("custom");
-    // No duplicate row was created for "Research House".
-    expect(listTemplates(db, { kind: "house" }).filter((x) => x.name === "Research House")).toHaveLength(1);
+    // No duplicate row was created for "Day Court".
+    expect(listTemplates(db, { kind: "house" }).filter((x) => x.name === "Day Court")).toHaveLength(1);
+    // The user row (is_seeded=0) is never deleted by cleanup either.
+    expect(still.isSeeded).toBe(false);
     // Other defaults are still inserted.
     expect(inserted).toBe(DEFAULT_TEMPLATES.length - 1);
   });
@@ -221,6 +224,120 @@ describe("seedDefaultTemplates", () => {
 });
 
 /* ================================================================== */
+/* Derivation parity + cleanup (default ACOTAR houses)                */
+/* ================================================================== */
+
+describe("derived default house templates", () => {
+  it("DEFAULT_TEMPLATES is exactly 10 derived house templates + the project template", () => {
+    const houses = DEFAULT_TEMPLATES.filter((t) => t.kind === "house");
+    const projects = DEFAULT_TEMPLATES.filter((t) => t.kind === "project");
+    expect(houses).toHaveLength(DEFAULT_HOUSES.length);
+    expect(houses).toHaveLength(10);
+    expect(projects.map((t) => t.name)).toEqual(["Standard Repo"]);
+    expect(houses.map((t) => t.name)).toEqual(DEFAULT_HOUSES.map((h) => h.house.name));
+  });
+
+  it("matches DEFAULT_HOUSES one-for-one (name + payload agent/configuration)", () => {
+    for (const h of DEFAULT_HOUSES) {
+      const tpl = DEFAULT_TEMPLATES.find((t) => t.kind === "house" && t.name === h.house.name);
+      expect(tpl, `missing derived template for ${h.house.name}`).toBeTruthy();
+      const payload = tpl!.payload as unknown as HouseTemplatePayload;
+      expect(payload.description).toBe(h.house.description);
+      expect(payload.agent).toEqual({ name: h.agent.name, role: h.agent.role });
+      expect(payload.configuration).toEqual(h.configuration);
+    }
+  });
+
+  it("every derived house payload parses against the strict houseTemplatePayloadSchema", () => {
+    for (const t of DEFAULT_TEMPLATES) {
+      if (t.kind !== "house") continue;
+      expect(() => houseTemplatePayloadSchema.parse(t.payload)).not.toThrow();
+      // `.strict()`: the payload must carry exactly description/agent/configuration.
+      const parsed = houseTemplatePayloadSchema.parse(t.payload);
+      expect(Object.keys(parsed).sort()).toEqual(["agent", "configuration", "description"]);
+      expect("name" in parsed).toBe(false);
+    }
+  });
+
+  it("the seeder writes exactly DEFAULT_TEMPLATES; each derived payload persists", () => {
+    const db = getDb();
+    const inserted = seedDefaultTemplates(db);
+    expect(inserted).toBe(DEFAULT_TEMPLATES.length);
+    const all = listTemplates(db);
+    expect(all.map((t) => `${t.kind}:${t.name}`).sort()).toEqual(
+      DEFAULT_TEMPLATES.map((t) => `${t.kind}:${t.name}`).sort(),
+    );
+    const dayCourt = findTemplateByName(db, "house", "Day Court")!;
+    const payload = dayCourt.payload as HouseTemplatePayload;
+    expect(payload.agent.name).toBe("Helion");
+    expect(payload.configuration.modelId).toBe("deepseek-v4.1-flash");
+  });
+});
+
+describe("seedDefaultTemplates cleanup (superseded seeds)", () => {
+  /** Pre-insert a seeded row directly (simulates an older boot's defaults). */
+  function insertSeededHouse(db: ReturnType<typeof getDb>, name: string): string {
+    const id = `seed-${name.replace(/\s+/g, "-").toLowerCase()}`;
+    getRawDb()
+      .prepare(
+        `INSERT INTO templates (id, kind, name, description, payload, is_seeded, created_at, updated_at)
+         VALUES (?, 'house', ?, 'superseded', ?, 1, ?, ?)`,
+      )
+      .run(id, name, JSON.stringify(housePayload()), new Date().toISOString(), new Date().toISOString());
+    return id;
+  }
+
+  it("removes superseded seeded house templates; user + project templates survive", () => {
+    const db = getDb();
+    const researchId = insertSeededHouse(db, "Research House");
+    const engineeringId = insertSeededHouse(db, "Engineering House");
+    // A user-created house template (is_seeded=0) that shares an old seed's name.
+    const userResearch = createTemplate(db, {
+      kind: "house",
+      name: "Research House (mine)",
+      payload: housePayload(),
+    });
+    // A user-created house template (is_seeded=0) whose name is NOT a current
+    // default — must survive because cleanup only touches is_seeded=1.
+    createTemplate(db, { kind: "house", name: "Old World", payload: housePayload() });
+
+    seedDefaultTemplates(db);
+
+    // Superseded SEEDED rows are gone.
+    expect(findTemplateByName(db, "house", "Research House")).toBeNull();
+    expect(findTemplateByName(db, "house", "Engineering House")).toBeNull();
+    expect(getTemplate(db, researchId)).toBeNull();
+    expect(getTemplate(db, engineeringId)).toBeNull();
+    // User template survives, seeded project survives.
+    expect(getTemplate(db, userResearch.id)).toBeTruthy();
+    expect(findTemplateByName(db, "project", "Standard Repo")).toBeTruthy();
+    // Exactly the current default set remains on the house side (+ user rows).
+    const houseNames = listTemplates(db, { kind: "house" }).map((t) => t.name);
+    for (const h of DEFAULT_HOUSES) expect(houseNames).toContain(h.house.name);
+    expect(houseNames).not.toContain("Research House");
+    expect(houseNames).not.toContain("Engineering House");
+  });
+
+  it("is idempotent — a second run deletes nothing and inserts nothing", () => {
+    const db = getDb();
+    insertSeededHouse(db, "Docs House");
+    seedDefaultTemplates(db);
+    const afterFirst = listTemplates(db).map((t) => t.id).sort();
+    const second = seedDefaultTemplates(db);
+    expect(second).toBe(0);
+    expect(listTemplates(db).map((t) => t.id).sort()).toEqual(afterFirst);
+  });
+
+  it("never deletes a user-created house template even if its name is absent from defaults", () => {
+    const db = getDb();
+    const user = createTemplate(db, { kind: "house", name: "Entirely Mine", payload: housePayload() });
+    seedDefaultTemplates(db);
+    expect(getTemplate(db, user.id)).toBeTruthy();
+    expect(findTemplateByName(db, "house", "Entirely Mine")!.isSeeded).toBe(false);
+  });
+});
+
+/* ================================================================== */
 /* Seeded immutability                                                */
 /* ================================================================== */
 
@@ -228,13 +345,14 @@ describe("seeded templates are immutable", () => {
   it("update/delete throw SeededTemplateError", () => {
     const db = getDb();
     seedDefaultTemplates(db);
-    const seeded = findTemplateByName(db, "house", "Research House")!;
+    const seeded = findTemplateByName(db, "house", "Day Court")!;
 
     expect(() => updateTemplate(db, seeded.id, { name: "Hacked" })).toThrow(SeededTemplateError);
     expect(() => deleteTemplate(db, seeded.id)).toThrow(SeededTemplateError);
     // Untouched.
-    expect(getTemplate(db, seeded.id)!.name).toBe("Research House");
-    expect(listTemplates(db, { kind: "house" })).toHaveLength(3);
+    expect(getTemplate(db, seeded.id)!.name).toBe("Day Court");
+    // The ten derived house templates are present (the old 3 were replaced).
+    expect(listTemplates(db, { kind: "house" })).toHaveLength(DEFAULT_HOUSES.length);
   });
 
   it("service-level update/delete on a seeded template also throws", () => {
@@ -299,12 +417,12 @@ describe("instantiateHouseTemplate", () => {
     const db = getDb();
     const t = createTemplate(db, {
       kind: "house",
-      name: "Research House",
+      name: "Templar House",
       payload: housePayload(),
     });
 
     const house = instantiateHouseTemplate(db, t.id);
-    expect(house.name).toBe("Research House");
+    expect(house.name).toBe("Templar House");
     expect(house.agent.name).toBe("Templar");
     expect(house.agent.role).toBe("Knight · engineer");
     expect(house.configuration.modelId).toBe("glm-5.3");
