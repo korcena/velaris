@@ -70,7 +70,11 @@ and MVP acceptance journey.
   plain-language instruction on the **Court** page and it plans a multi-step quest,
   delegating subtasks to other houses as a dependency-aware DAG. The plan board shows live
   progress, supports mid-plan steering, rolls up cost, and aborts the whole plan (with a
-  burning-castle visual) if a subtask keeps failing.
+  burning-castle visual) if a subtask keeps failing. Reconfigure its agent — model, prompt,
+  name — from the house detail's **Agents** tab (open it via **Configure the High Lord** on
+  the Court page). Its **roster** is fixed (it keeps exactly its one orchestrator, and can't
+  be disabled, archived, or deleted), and it must stay on the OpenCode provider because the
+  Court's planning session depends on it.
 - **Answer messenger birds** — when an agent requests a file/command permission or asks a
   clarifying question, a gold bird indicator appears on its house and in the Messenger
   Roost. Approve, reject, or reply; execution resumes immediately.
@@ -93,7 +97,8 @@ and MVP acceptance journey.
 - **Raise more than one banner** — a house can host several agents, each with its own
   provider, model, prompt, allowlist, tools, permissions, approval policy, and concurrency.
   Add agents from the house panel and point a quest at a specific one; single-agent houses
-  behave exactly as before.
+  behave exactly as before. The High Lord is the one exception: its roster is fixed to a
+  single orchestrator, so the panel offers **Edit** but no add or delete.
 - **Build from templates** — conjure a fully configured house or project from a template:
   seeded defaults ship ready to use (models, prompts, policies and all), and you can save
   your own. Instantiate and edit normally; wrong-kind payloads are rejected, not silently
