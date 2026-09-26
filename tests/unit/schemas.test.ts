@@ -600,6 +600,36 @@ describe("taskCreateSchema", () => {
   });
 });
 
+describe("task workingDirectory normalization", () => {
+  it("create: treats empty/whitespace/undefined/null as unset (null)", () => {
+    for (const v of [undefined, null, "", "   "]) {
+      expect(taskCreateSchema.parse({ title: "T", workingDirectory: v }).workingDirectory).toBeNull();
+    }
+  });
+
+  it("create: keeps an absolute path and rejects a relative one", () => {
+    expect(
+      taskCreateSchema.parse({ title: "T", workingDirectory: "/home/x" }).workingDirectory,
+    ).toBe("/home/x");
+    expect(() =>
+      taskCreateSchema.parse({ title: "T", workingDirectory: "relative/path" }),
+    ).toThrow(/absolute/i);
+  });
+
+  it("update: preserves undefined (no change) but clears empty/whitespace to null", () => {
+    // Omitted must stay undefined so the repo leaves the existing value alone.
+    expect("workingDirectory" in taskUpdateSchema.parse({})).toBe(false);
+    for (const v of [null, "", "   "]) {
+      expect(taskUpdateSchema.parse({ workingDirectory: v }).workingDirectory).toBeNull();
+    }
+  });
+
+  it("update: keeps an absolute path and rejects a relative one", () => {
+    expect(taskUpdateSchema.parse({ workingDirectory: "/home/x" }).workingDirectory).toBe("/home/x");
+    expect(() => taskUpdateSchema.parse({ workingDirectory: "relative/path" })).toThrow(/absolute/i);
+  });
+});
+
 describe("taskUpdateSchema", () => {
   it("accepts an empty patch", () => {
     expect(taskUpdateSchema.parse({})).toEqual({});

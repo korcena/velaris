@@ -3,7 +3,12 @@
  */
 
 import { z } from "zod";
-import { uuidSchema, trimmedNonEmpty } from "./common";
+import {
+  uuidSchema,
+  trimmedNonEmpty,
+  absolutePathOrNullCreate,
+  absolutePathOrNullUpdate,
+} from "./common";
 
 /**
  * Task type is an extensible string — validated as a non-empty string, NOT a
@@ -27,7 +32,7 @@ export const taskCreateSchema = taskBase.extend({
   projectId: uuidSchema.optional().nullable().default(null),
   /** Phase 6 Stage B: optional target agent (must belong to houseId — checked at the route). */
   agentId: uuidSchema.optional().nullable().default(null),
-  workingDirectory: z.string().trim().optional().nullable().default(null),
+  workingDirectory: absolutePathOrNullCreate,
   executionPreferences: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
@@ -41,7 +46,7 @@ export const taskUpdateSchema = z.object({
   houseId: uuidSchema.optional().nullable(),
   projectId: uuidSchema.optional().nullable(),
   agentId: uuidSchema.optional().nullable(),
-  workingDirectory: z.string().trim().optional().nullable(),
+  workingDirectory: absolutePathOrNullUpdate,
   executionPreferences: z.record(z.string(), z.unknown()).optional(),
   // Phase 1: status may only be set to "cancelled" (nothing else executes).
   status: z.enum(TASK_STATUS_TUPLE).optional(),

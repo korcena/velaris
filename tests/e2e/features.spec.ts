@@ -44,6 +44,24 @@ test.describe("Quest Board", () => {
     await expect(page.getByRole("cell", { name: "Map the city walls" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "queued", exact: true })).toBeVisible();
   });
+
+  test("clearing the working-directory override still posts the quest", async ({ page }) => {
+    await page.goto("/quests");
+    await page.getByRole("button", { name: "New quest" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Title", { exact: true }).fill("Sweep the lower ward");
+
+    // Reproduce the bug: type into the override, then clear it, then submit.
+    const workdir = dialog.getByLabel("Working directory (override)");
+    await workdir.fill("/tmp/somewhere");
+    await workdir.clear();
+    await expect(workdir).toHaveValue("");
+
+    await dialog.getByRole("button", { name: "Post quest" }).click();
+    // No raw SQLite constraint toast; the dialog closes and the quest is listed.
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("cell", { name: "Sweep the lower ward" })).toBeVisible();
+  });
 });
 
 test.describe("Projects", () => {

@@ -153,7 +153,9 @@ export default function QuestBoardPage() {
       const payload = {
         ...values,
         // working_directory defaults to the project directory if a project is chosen.
-        workingDirectory: values.workingDirectory ?? (selectedProject
+        // `||` also treats an empty/whitespace override as unset (the schema would
+        // normalize it to null anyway; this keeps the project-dir fallback working).
+        workingDirectory: values.workingDirectory || (selectedProject
           ? projects.find((p) => p.id === selectedProject)?.directory ?? null
           : null),
       };
@@ -378,6 +380,9 @@ export default function QuestBoardPage() {
                   placeholder="/abs/path (defaults to project dir)"
                   className="font-mono text-xs"
                 />
+                {errors.workingDirectory && (
+                  <p className="text-xs text-velaris-crimson">{errors.workingDirectory.message}</p>
+                )}
               </div>
             </div>
 

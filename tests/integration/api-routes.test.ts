@@ -793,11 +793,40 @@ describe("POST /api/tasks", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rejects a relative workingDirectory with 400 (CHECK constraint mapped)", async () => {
+  it("rejects a relative workingDirectory with 400 (zod absolute-path refine)", async () => {
     const res = await createTaskRoute(
       jsonReq("POST", `${BASE}/api/tasks`, { title: "T", workingDirectory: "relative/path" }),
     );
     expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(JSON.stringify(body)).toMatch(/absolute/i);
+  });
+
+  it("normalizes an empty workingDirectory to null → 201", async () => {
+    const res = await createTaskRoute(
+      jsonReq("POST", `${BASE}/api/tasks`, { title: "T", workingDirectory: "" }),
+    );
+    expect(res.status).toBe(201);
+    expect((await res.json()).task.workingDirectory).toBeNull();
+  });
+
+  it("normalizes a whitespace-only workingDirectory to null → 201", async () => {
+    const res = await createTaskRoute(
+      jsonReq("POST", `${BASE}/api/tasks`, { title: "T", workingDirectory: "   " }),
+    );
+    expect(res.status).toBe(201);
+    expect((await res.json()).task.workingDirectory).toBeNull();
+  });
+
+  it("accepts an absolute workingDirectory without checking existence → 201", async () => {
+    const res = await createTaskRoute(
+      jsonReq("POST", `${BASE}/api/tasks`, {
+        title: "T",
+        workingDirectory: "/nonexistent/abs",
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect((await res.json()).task.workingDirectory).toBe("/nonexistent/abs");
   });
 
   it("rejects malformed JSON with 400", async () => {
@@ -922,6 +951,30 @@ describe("GET/PATCH/DELETE /api/tasks/{id}", () => {
       idCtx(missing),
     );
     expect(res.status).toBe(404);
+  });
+
+  it("PATCH clears workingDirectory with an empty string → 200/null", async () => {
+    const created = await createTaskRoute(
+      jsonReq("POST", `${BASE}/api/tasks`, { title: "T", workingDirectory: "/home/x" }),
+    );
+    const id = ((await created.json()) as { task: { id: string } }).task.id;
+    expect(created.status).toBe(201);
+
+    const res = await patchTask(
+      jsonReq("PATCH", `${BASE}/api/tasks/${id}`, { workingDirectory: "" }),
+      idCtx(id),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).task.workingDirectory).toBeNull();
+  });
+
+  it("PATCH rejects a relative workingDirectory with 400", async () => {
+    const id = await makeTask();
+    const res = await patchTask(
+      jsonReq("PATCH", `${BASE}/api/tasks/${id}`, { workingDirectory: "relative/path" }),
+      idCtx(id),
+    );
+    expect(res.status).toBe(400);
   });
 
   it("DELETE removes the task → 204; unknown → 404", async () => {

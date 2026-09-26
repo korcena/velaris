@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { ORCHESTRATION_DEFAULTS } from "@/shared/constants";
-import { uuidSchema, trimmedNonEmpty } from "./common";
+import { uuidSchema, trimmedNonEmpty, absolutePathOrNullUpdate } from "./common";
 import { taskTypeSchema } from "./task";
 
 /** A single planner-emitted subtask (plan-local ids: "s0","s1",...). */
@@ -43,7 +43,7 @@ export type Plan = z.infer<typeof planSchema>;
 export const courtInstructionSchema = z.object({
   instruction: trimmedNonEmpty(8000),
   projectId: uuidSchema.optional().nullable(),
-  workingDirectory: z.string().trim().optional().nullable(),
+  workingDirectory: absolutePathOrNullUpdate,
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
 });
 

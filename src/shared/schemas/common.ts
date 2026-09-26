@@ -21,6 +21,35 @@ export const trimmedNonEmpty = (max = 2000) =>
     .max(max, { message: `Must be at most ${max} characters` });
 
 /**
+ * An absolute-path working directory, or `null` when the value is empty or
+ * whitespace-only. A non-empty value MUST start with `/` — this mirrors the
+ * `ck_tasks_working_dir_abs` DB CHECK so the failure surfaces as a friendly
+ * 400 validation error instead of a raw SQLite constraint message.
+ */
+const absolutePathOrNull = z
+  .string()
+  .trim()
+  .transform((v) => (v === "" ? null : v))
+  .refine((v) => v === null || v.startsWith("/"), {
+    message: "Working directory must be an absolute path (starts with /)",
+  });
+
+/**
+ * Create semantics: `undefined` / `null` / `""` / whitespace-only all normalize
+ * to `null` (the field is unset); any other value must be absolute.
+ */
+export const absolutePathOrNullCreate = absolutePathOrNull
+  .nullish()
+  .transform((v) => v ?? null);
+
+/**
+ * Update (PATCH) semantics: `undefined` is preserved untouched so an omitted
+ * field means "no change"; `null` / `""` / whitespace-only clear the value to
+ * `null`; any other value must be absolute.
+ */
+export const absolutePathOrNullUpdate = absolutePathOrNull.nullable().optional();
+
+/**
  * A JSON string containing an array of strings (e.g. stored allowlist / tools).
  * Accepts either a JSON-encoded string or a plain string[] for convenience;
  * always normalizes to a JSON string on output.
