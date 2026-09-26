@@ -259,6 +259,7 @@ export default function QuestBoardPage() {
                 {...register("description")}
                 placeholder="What should the house accomplish?"
                 rows={4}
+                className="h-32 resize-none overflow-y-auto field-sizing-fixed!"
               />
             </div>
 

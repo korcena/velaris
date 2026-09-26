@@ -21,7 +21,21 @@ test.describe("Quest Board", () => {
     await page.getByRole("button", { name: "New quest" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Title", { exact: true }).fill("Map the city walls");
-    await dialog.getByLabel("Description").fill("A cartography quest.");
+
+    // Description is a fixed-height, scrollable textarea (no auto-grow).
+    const description = dialog.getByLabel("Description");
+    const initialClientHeight = await description.evaluate((el) => el.clientHeight);
+    const longDescription = Array.from(
+      { length: 40 },
+      (_, i) => `Line ${i + 1} of a very long cartography quest.`,
+    ).join("\n");
+    await description.fill(longDescription);
+    const { clientHeight, scrollHeight } = await description.evaluate((el) => ({
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    }));
+    expect(clientHeight).toBe(initialClientHeight); // did NOT grow
+    expect(scrollHeight).toBeGreaterThan(clientHeight); // scrolls instead
 
     await dialog.getByRole("button", { name: "Post quest" }).click();
     await expect(dialog).not.toBeVisible();
