@@ -259,6 +259,9 @@ describe("full migration chain from the Phase 1 schema head", () => {
     expect(indexNames).toContain("idx_tasks_status");
     expect(indexNames).toContain("idx_execution_sessions_task");
     expect(indexNames).toContain("idx_audit_created");
+    // Phase 6.2 Stage S0 (0008): additive created_at indexes on tasks.
+    expect(indexNames).toContain("idx_tasks_created");
+    expect(indexNames).toContain("idx_tasks_status_created");
 
     const fkTables = (
       db.prepare("PRAGMA foreign_key_list(tasks)").all() as Array<{ table: string }>
@@ -369,6 +372,41 @@ describe("full migration chain from the Phase 1 schema head", () => {
       db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{ name: string }>
     ).map((r) => r.name);
     expect(indexNames).toContain("idx_tasks_agent");
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
+
+  it("the 0008 tasks.created_at migration is ADDITIVE (CREATE INDEX only, no DROP/rebuild/PRAGMA)", () => {
+    const sql = fs.readFileSync(
+      path.join(DRIZZLE_DIR, "0008_unknown_iron_monger.sql"),
+      "utf8",
+    );
+    // Additive only: the Phase-5 data-loss incident makes any table rebuild
+    // unacceptable, so reject every destructive/rebuild construct outright.
+    expect(sql).not.toMatch(/\bDROP\b/i);
+    expect(sql).not.toMatch(/CREATE\s+TABLE/i);
+    expect(sql).not.toMatch(/PRAGMA/i);
+    expect(sql).not.toMatch(/ALTER\s+TABLE/i);
+    // And it is exactly the two expected CREATE INDEX statements.
+    const statements = splitStatements(sql);
+    expect(statements).toHaveLength(2);
+    for (const stmt of statements) expect(stmt).toMatch(/^CREATE INDEX\b/i);
+    expect(sql).toMatch(/idx_tasks_created` ON `tasks` \(`created_at`\)/);
+    expect(sql).toMatch(/idx_tasks_status_created` ON `tasks` \(`status`,`created_at`\)/);
+  });
+
+  it("0008's created_at indexes exist on tasks and reference the right columns", () => {
+    const db = new Database(dbPath);
+    const indexList = (
+      db.prepare("PRAGMA index_list(tasks)").all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    expect(indexList).toContain("idx_tasks_created");
+    expect(indexList).toContain("idx_tasks_status_created");
+
+    const colsOf = (index: string): string[] =>
+      (db.prepare(`PRAGMA index_info(${index})`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colsOf("idx_tasks_created")).toEqual(["created_at"]);
+    expect(colsOf("idx_tasks_status_created")).toEqual(["status", "created_at"]);
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });

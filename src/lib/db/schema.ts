@@ -188,6 +188,10 @@ export const tasks = sqliteTable(
     index("idx_tasks_status").on(t.status),
     index("idx_tasks_project").on(t.projectId),
     index("idx_tasks_agent").on(t.agentId),
+    // Phase 6.2 Stage S0: serve listTasks/archive (created_at DESC) and
+    // queued-task ordering (status + created_at ASC).
+    index("idx_tasks_created").on(t.createdAt),
+    index("idx_tasks_status_created").on(t.status, t.createdAt),
     check("ck_tasks_title_len", sql`length(title) between 1 and 200`),
     check("ck_tasks_priority", sql`priority in ('low','medium','high','urgent')`),
     check(

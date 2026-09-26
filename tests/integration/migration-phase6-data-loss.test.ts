@@ -246,4 +246,19 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("0008 adds the created_at indexes (additive) and preserves task history", () => {
+    if (!upgraded) return;
+    const db = new Database(upgradePath);
+    db.pragma("foreign_keys = ON");
+    const indexList = (db.prepare("PRAGMA index_list(tasks)").all() as Array<{ name: string }>).map(
+      (r) => r.name,
+    );
+    expect(indexList).toContain("idx_tasks_created");
+    expect(indexList).toContain("idx_tasks_status_created");
+    // The seeded task survived the additive 0008 migration.
+    expect(count(db, "tasks", "id='task-p6'")).toBe(1);
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });
