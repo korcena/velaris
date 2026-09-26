@@ -47,14 +47,17 @@ and MVP acceptance journey.
   | Illyria | Cassian | Operations / DevOps |
 
   Each ships with a role-specific system prompt and a tuned permission posture (only the
-  developer, tester, and operations houses may run shell commands). Seeding is idempotent and
-  never clobbers your edits: a house is only created when no house with that exact name
-  exists, so reconfiguring a seeded house in place is preserved on every later boot. Note
-  that **renaming** a seeded house means its original default name becomes absent and is
-  re-created on a later boot — your renamed house is preserved, and a fresh default is added
-  alongside it. The same roster is also available as immutable house templates (10 house
-  templates + the `Standard Repo` project template), so an accidental delete or a bad edit is
-  recoverable.
+  developer, tester, and operations houses may run shell commands). They all default to the
+  **`deepseek-v4.1-flash`** model on the `ollama-cloud` provider, as do the High Lord and
+  newly created houses and agents. Seeding is insert-only and idempotent, and never clobbers
+  your edits: a house is only created when no house with that exact name exists, so
+  reconfiguring a seeded house (or the High Lord) in place — including its model — is
+  preserved on every later boot, and a house you have already changed keeps its current model
+  until you edit it in the UI. Note that **renaming** a seeded house means its original
+  default name becomes absent and is re-created on a later boot — your renamed house is
+  preserved, and a fresh default is added alongside it. The same roster is also available as
+  immutable house templates (10 house templates + the `Standard Repo` project template), so an
+  accidental delete or a bad edit is recoverable.
   The superseded seeded house templates (`Research House`, `Engineering House`, `Docs House`)
   are cleaned up once on boot; user-created and project templates are never deleted.
 - **Post quests** — register project directories (git info auto-detected), create typed
