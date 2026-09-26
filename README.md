@@ -16,7 +16,7 @@ Phases 1–5 and Phase 6 part 1 (6.1) are implemented and tested:
 | 1 — Foundation | App bootstrap, SQLite/Drizzle schema, houses/projects/tasks/provider-config CRUD, sectioned layout (now 9 sections), dark Velaris theme, reduced-motion support | ✅ Done |
 | 2 — Real Execution & Approvals Core | Velaris Engine (task queue, OpenCode server lifecycle, SSE ingestion), real task execution, session persistence, structured events, cost/token tracking, functional messenger-bird approvals (approve/reject/reply), live agent chat, model picker, `/api/stream` SSE | ✅ Done |
 | 3 — Velaris World & Messenger Roost | Interactive city view with per-house status animations (chimney smoke, messenger birds, once-per-task fireworks), full house workspace panel (Overview / Activity / Agent Chat / Task Results with diff viewer / Approvals), Roost hub with filters + resolved-approval history, read-only artifacts API | ✅ Done |
-| 3.1 — City Map | Full-screen Sims-like bird's-eye map at `/map`: houses as shaded castles, pan & zoom (wheel + buttons), outward-spiral placement, real-time status animations & celebrations | ✅ Done |
+| 3.1 — Archipelago Map | Full-screen bird's-eye map at `/map`: houses as citadels on a seeded procedural archipelago, pan & zoom (wheel + buttons), real-time status effects, legend filter & deep-linking drawer | ✅ Done |
 | 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs, mid-plan steering, burning-castle abort | ✅ Done |
 | 5 — Ollama-Native Agent Runtime | Direct-Ollama provider + tool loop, permission-gated fs/shell/git tools, native pause/resume, estimated cost tracking, flag-gated worktree scaffold | ✅ Done |
 | 6 — Advanced Platform (6.1) | Audit log, multi-agent houses, house/project templates, archives search, usage/cost dashboards, monitoring panel | ✅ Done |
@@ -71,12 +71,19 @@ and MVP acceptance journey.
 - **Answer messenger birds** — when an agent requests a file/command permission or asks a
   clarifying question, a gold bird indicator appears on its house and in the Messenger
   Roost. Approve, reject, or reply; execution resumes immediately.
-- **See the city** — the **Map** page renders every house as a shaded castle on a
-  full-screen night map: the **High Lord** castle (gold-plated, and burning when its plan
-  is aborted) is pinned at the city heart, while other houses spread outward in rings.
-  Drag to pan, wheel or buttons to zoom, click a castle to visit its house. Windows pulse
-  while planning, chimneys smoke while working, a wing-flapping messenger bird appears
-  while awaiting your answer, and a fireworks burst celebrates each completed quest.
+- **Sail the archipelago** — the **Map** page renders the city as a top-down
+  fantasy archipelago: every house is a citadel on its own seeded island, and
+  the **High Lord** (gold-plated, and burning when its plan is aborted) holds
+  the world heart while the other houses spread outward in founding order.
+  Each house shows its state through top-down magic: a slow moonlit aura while
+  idle, a calm rune ring while planning, counter-rotating starfire rings while
+  working, a magenta lighthouse sweep and bobbing `!` when it needs you, and
+  embers with drifting smoke when a run fails. A legend filters houses by
+  state; a cartouche keeps a live summary. Drag to pan, wheel or buttons to
+  zoom, and click a citadel to open a drawer with its current quest and a
+  **Messenger Roost →** link when a bird is waiting — both links deep-link to
+  the existing house and Roost pages rather than duplicating approval actions.
+  A fireworks burst celebrates each completed quest.
 - **Inspect results** — each house has a workspace panel with live usage stats, a
   structured activity timeline, agent chat, and per-quest results including rendered diffs
   of the files the agent changed.
@@ -166,7 +173,7 @@ stream with backoff reconnect and boot-time reconciliation of orphaned sessions.
   OpenCode event mapping, queue/reconcile logic, the Ollama tool loop, permission gating
   (path-escape/shell guards), the provider seam, migration data-preservation (including the
   Phase-1-head migration-chain safety test and seeded-real-DB guard), pause/resume,
-  city-map camera/layout/palette logic, diff parsing, multi-agent routing, template
+  city-map camera/island-layout/terrain/status/palette logic, diff parsing, multi-agent routing, template
   instantiation, archive search, audit writes, usage reconciliation (estimated vs
   provider-reported, with a double-count guard), and monitoring queries. Integration tests
   invoke API route handlers directly against a temp database.

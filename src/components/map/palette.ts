@@ -7,7 +7,8 @@
  * base token. Roof is mixed slightly darker, tower slightly lighter than keep.
  */
 
-import { hashHouseId } from "./plot-layout";
+import { hashHouseId } from "./random";
+import type { MapEffect } from "./status-effects";
 
 /** A single 6-digit hex color, e.g. "#7c6cf0". */
 export type HexColor = `#${string}`;
@@ -121,3 +122,42 @@ export function paletteForHouse(houseId: string): CastlePalette {
     windowGlowSoft: "#ffd97a",
   };
 }
+
+/**
+ * The reference map palette (velaris-map.html), scoped as the map's local CSS
+ * custom properties in globals.css. Kept here as data so JS-driven colour (the
+ * legend, drawer pill, per-state finial) matches the CSS variables exactly.
+ */
+export const MAP_PALETTE = {
+  abyss: "#0c1030",
+  sea: "#1a2352",
+  land: "#262c52",
+  landHi: "#333b69",
+  roof: "#3d4679",
+  ink: "#aab6ea",
+  inkDim: "#5b6599",
+  label: "#ece8ff",
+  text: "#d9dcf2",
+  textDim: "#9097bf",
+  idle: "#8fb8ff",
+  work: "#ffcf6e",
+  need: "#ff7ad9",
+  fail: "#e0523f",
+  ash: "#6f6a80",
+  paused: "#6f7bb0",
+} as const;
+
+/**
+ * Effect → colour, matching the scoped CSS variables. Used for the finial
+ * (island glyph), the drawer status pill, and the legend count. `paused` and
+ * `dimmed` are calm/ash so an inactive house reads as set aside.
+ */
+export const EFFECT_COLORS: Record<MapEffect, string> = {
+  idle: MAP_PALETTE.idle,
+  planning: MAP_PALETTE.paused,
+  working: MAP_PALETTE.work,
+  need: MAP_PALETTE.need,
+  paused: MAP_PALETTE.paused,
+  fail: MAP_PALETTE.fail,
+  dimmed: MAP_PALETTE.ash,
+};

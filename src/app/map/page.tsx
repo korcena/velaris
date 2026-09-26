@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Map (Phase 3.1) — full-screen interactive city map. Renders the castle map
- * with a floating title chip ("Map") that provides the accessible heading name
- * the nav tests assert on.
+ * Map (archipelago redesign) — full-screen interactive map. Renders the
+ * archipelago with a floating title chip ("Map") that provides the accessible
+ * heading name the nav tests assert on.
  */
 
 import { CastleMap } from "@/components/map/castle-map";
@@ -18,7 +18,7 @@ export default function MapPage() {
         <h1 className="inline-block rounded-full border border-border/60 bg-card/60 px-4 py-1 font-serif-display text-lg text-foreground backdrop-blur">
           Map
         </h1>
-        <p className="mt-1 text-xs text-muted-foreground">The city at a glance</p>
+        <p className="mt-1 text-xs text-muted-foreground">The archipelago at a glance</p>
       </div>
       <CastleMap />
     </div>

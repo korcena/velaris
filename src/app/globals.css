@@ -142,10 +142,10 @@ html.velaris-reduced-motion *::after {
 }
 
 /* =================================================================== */
-/* Castle map (Phase 3.1) — transform/opacity ONLY                       */
-/* Caps: 3 smoke puffs · 12 firework particles · 6 flicker elements.   */
-/* Reduced-motion is handled by the existing global clamps + a JS       */
-/* static-glyph swap for fireworks (see Castle).                       */
+/* Archipelago map (top-down redesign) — transform/opacity ONLY         */
+/* Scoped map palette as LOCAL custom properties (spec §7). No Google   */
+/* Fonts: the shell reuses --font-serif / --font-sans. Reduced motion is */
+/* handled by the global clamps + the Effect/Celebration overlays.       */
 /* =================================================================== */
 
 /* --- Map viewport / world shell --- */
@@ -159,6 +159,24 @@ html.velaris-reduced-motion *::after {
   -webkit-user-select: none;
   user-select: none;
   cursor: grab;
+
+  /* Scoped map palette (reference velaris-map.html). */
+  --abyss: #0c1030;
+  --sea: #1a2352;
+  --land: #262c52;
+  --land-hi: #333b69;
+  --roof: #3d4679;
+  --ink: #aab6ea;
+  --ink-dim: #5b6599;
+  --label: #ece8ff;
+  --text: #d9dcf2;
+  --text-dim: #9097bf;
+  --idle: #8fb8ff;
+  --work: #ffcf6e;
+  --need: #ff7ad9;
+  --fail: #e0523f;
+  --ash: #6f6a80;
+  --paused: #6f7bb0;
 }
 .castle-map-viewport[data-dragging="true"] {
   cursor: grabbing;
@@ -169,14 +187,14 @@ html.velaris-reduced-motion *::after {
   top: 0;
 }
 
-/* --- Base ground layer: covers the viewport at all times (Phase 3.1) --- */
-/* The world canvas is finite (1280×800); this full-viewport layer ensures
+/* --- Base ground layer: covers the viewport at all times --- */
+/* The world canvas is finite (1600×1000); this full-viewport layer ensures
    panning to / zooming at the world's edge never reveals empty space.     */
 .map-ground {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, #131c44, #0e1534);
+  background: var(--abyss, #0c1030);
 }
 /* Control pill + world sit above the ground layer. */
 .map-control-pill,
@@ -184,65 +202,538 @@ html.velaris-reduced-motion *::after {
   z-index: 1;
 }
 
-/* --- Decorative terrain (inside the world; pans & zooms with it) --- */
-.map-terrain {
+/* --- Archipelago SVG (inside the world; pans & zooms with it) --- */
+.map-svg {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, #131c44, #0e1534);
-}
-.map-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(124, 108, 240, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(124, 108, 240, 0.07) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-/* --- Moon: crescent-lit disc with a soft golden glow and craters --- */
-/* A radial light (upper-left) + dark overlay (lower-right) reads as a
-   crescent; the box-shadow halo makes it unmistakably a moon.            */
-.map-moon {
-  position: absolute;
-  right: 8%;
-  top: 7%;
-  width: 84px;
-  height: 84px;
-  border-radius: 9999px;
-  background:
-    radial-gradient(circle at 30% 30%, #f5e7c1 0%, #e8c66b 35%, #c9a95e 60%, #8f7a45 100%);
-  box-shadow:
-    0 0 40px 14px rgba(232, 198, 107, 0.22),
-    0 0 110px 40px rgba(232, 198, 107, 0.08),
-    inset -14px -10px 24px rgba(11, 16, 38, 0.55);
-}
-/* Craters — subtle darker dents on the lit surface. */
-.map-moon::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background-image:
-    radial-gradient(circle at 62% 38%, rgba(11, 16, 38, 0.35) 0 7%, transparent 8%),
-    radial-gradient(circle at 38% 62%, rgba(11, 16, 38, 0.28) 0 5%, transparent 6%),
-    radial-gradient(circle at 70% 68%, rgba(11, 16, 38, 0.3) 0 4%, transparent 5%);
-}
-.map-stars {
-  position: absolute;
-  inset: 0;
-}
-.map-star {
-  position: absolute;
-  width: 3px;
-  height: 3px;
-  border-radius: 9999px;
-  background: rgba(205, 211, 240, 0.7);
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-/* --- Control pill --- */
-.map-control-pill {
+/* Sea & land fills */
+.map-ocean {
+  fill: url(#map-ocean-grad);
+}
+.map-coast {
+  fill: url(#map-land-grad);
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+.map-shallow {
+  fill: none;
+  stroke: var(--ink, #aab6ea);
+  stroke-linejoin: round;
+}
+.map-contour {
+  fill: none;
+  stroke: var(--ink-dim, #5b6599);
+  stroke-width: 0.7;
+  stroke-dasharray: 2 5;
+  opacity: 0.6;
+}
+.map-grid line {
+  stroke: var(--ink-dim, #5b6599);
+  stroke-width: 0.6;
+  opacity: 0.14;
+}
+.map-river {
+  fill: none;
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 1.2;
+  opacity: 0.5;
+  stroke-linecap: round;
+}
+.map-mtn {
+  fill: none;
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 1;
+  opacity: 0.55;
+  stroke-linejoin: round;
+}
+.map-mtn-shade {
+  fill: var(--ink-dim, #5b6599);
+  opacity: 0.35;
+}
+.map-tree {
+  fill: #2b3862;
+  stroke: var(--ink-dim, #5b6599);
+  stroke-width: 0.6;
+}
+.map-region {
+  font-family: var(--font-serif);
+  fill: var(--ink, #aab6ea);
+  opacity: 0.75;
+  letter-spacing: 0.35em;
+  text-anchor: middle;
+  pointer-events: none;
+}
+/* The large region title is a faint background watermark so it never competes
+   with a house label that shares its band (D2). */
+.map-region-watermark {
+  opacity: 0.3;
+}
+.map-sea-label {
+  font-family: var(--font-serif);
+  font-style: italic;
+  fill: var(--ink, #aab6ea);
+  opacity: 0.45;
+  letter-spacing: 0.25em;
+  pointer-events: none;
+}
+.map-star {
+  fill: #d6dcff;
+}
+.map-twinkle {
+  animation: map-twinkle var(--dur, 4s) ease-in-out infinite;
+}
+.map-fog {
+  fill: #8c96d6;
+  opacity: 0.06;
+  animation: map-drift 90s linear infinite alternate;
+}
+.map-fog.b {
+  animation-duration: 120s;
+  animation-direction: alternate-reverse;
+}
+.map-compass {
+  color: var(--ink, #aab6ea);
+}
+
+/* --- Houses & citadel glyph --- */
+.map-island-house {
+  cursor: pointer;
+  outline: none;
+  transition: opacity 0.4s;
+}
+.map-island-house .fx {
+  pointer-events: none;
+}
+/* Static click/focus target (kept free of animated children). The visible focus
+   ring lives on this element (the actual focusable node): `:focus-visible` never
+   matches ancestors, so the `.map-island-house` rules below use `:focus-within`
+   to drive the label/selection highlight from the focused descendant. */
+.map-house-hit {
+  cursor: pointer;
+}
+.map-house-hit:focus-visible {
+  /* A contrasting ink ring, offset clear of the citadel glyph. */
+  outline: 2px solid var(--ink, #aab6ea);
+  outline-offset: 2px;
+}
+.map-island-house[data-dimmed="true"] {
+  opacity: 0.22;
+}
+.map-house-label {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  fill: var(--label, #ece8ff);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--abyss, #0c1030);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  transition: fill 0.2s;
+}
+.map-house-role {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  fill: var(--text-dim, #9097bf);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--abyss, #0c1030);
+  stroke-width: 3px;
+}
+.map-island-house:hover .map-house-label,
+.map-island-house:focus-within .map-house-label {
+  fill: #fff;
+}
+.map-sel {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.map-island-house[data-selected="true"] .map-sel,
+.map-island-house:focus-within .map-sel {
+  opacity: 1;
+}
+
+.map-glyph .wall {
+  fill: var(--land-hi, #333b69);
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 1;
+}
+.map-glyph .turret {
+  fill: var(--land-hi, #333b69);
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 0.8;
+}
+.map-glyph .roof {
+  fill: var(--roof, #3d4679);
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 0.8;
+}
+.map-glyph .ridge {
+  stroke: var(--ink, #aab6ea);
+  stroke-width: 0.5;
+  opacity: 0.55;
+}
+/* High Lord gilding: a fixed gold finial/wall accent. */
+.map-island-house[data-kind="high_lord"] .map-glyph .wall {
+  stroke: #e8c66b;
+}
+.map-island-house[data-kind="high_lord"] .map-house-label {
+  fill: #e8c66b;
+}
+/* Failed houses read burnt: dim the glyph (colour still carries the ember aura). */
+.map-island-house[data-state="fail"] .map-glyph {
+  opacity: 0.7;
+}
+.map-island-house[data-state="dimmed"] {
+  opacity: 0.45;
+}
+
+/* Pending-approval gold bird dot, regardless of state. */
+.map-house-overlay {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  pointer-events: none;
+}
+.map-bird-dot {
+  position: absolute;
+  left: 16px;
+  top: -30px;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #e8c66b;
+  border: 1px solid #fff;
+  box-shadow: 0 0 6px rgba(232, 198, 107, 0.7);
+}
+
+/* --- Effect keyframes / utilities (transform/opacity only) --- */
+.fx-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-spin var(--dur, 10s) linear infinite;
+}
+.fx-spin.rev {
+  animation-direction: reverse;
+}
+.fx-breathe {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-breathe var(--dur, 5s) ease-in-out infinite;
+}
+.fx-gather {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-gather var(--dur, 1.6s) ease-in infinite;
+}
+.fx-emit {
+  animation: map-emit var(--dur, 1.8s) ease-out infinite;
+}
+.fx-ripple {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-ripple var(--dur, 2.4s) ease-out infinite;
+}
+.fx-bob {
+  animation: map-bob 1.6s ease-in-out infinite;
+}
+.fx-flicker {
+  animation: map-flicker var(--dur, 2.3s) linear infinite;
+}
+.fx-smoke {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-smoke var(--dur, 4s) ease-out infinite;
+}
+.fx-glow {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-glow var(--dur, 3s) ease-in-out infinite;
+}
+.is-paused {
+  opacity: 0.6;
+}
+
+@keyframes map-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes map-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes map-gather {
+  0% { transform: scale(1.35); opacity: 0; }
+  40% { opacity: 0.8; }
+  100% { transform: scale(0.45); opacity: 0; }
+}
+@keyframes map-emit {
+  0% { transform: translate(0, 0); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translate(var(--dx), var(--dy)); opacity: 0; }
+}
+@keyframes map-ripple {
+  0% { transform: scale(0.4); opacity: 0.95; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes map-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes map-flicker {
+  0% { opacity: 0.6; }
+  8% { opacity: 0.2; }
+  12% { opacity: 0.7; }
+  40% { opacity: 0.45; }
+  43% { opacity: 0.1; }
+  47% { opacity: 0.55; }
+  80% { opacity: 0.35; }
+  100% { opacity: 0.6; }
+}
+@keyframes map-smoke {
+  0% { transform: translate(0, 0) scale(0.4); opacity: 0; }
+  25% { opacity: 0.55; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(2.1); opacity: 0; }
+}
+@keyframes map-glow {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+@keyframes map-twinkle {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.9; }
+}
+@keyframes map-drift {
+  from { transform: translateX(-120px); }
+  to { transform: translateX(160px); }
+}
+
+/* --- Cartouche / legend / drawer / chrome --- */
+.map-cartouche {
+  position: absolute;
+  top: 3.75rem;
+  left: 1rem;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ink, #aab6ea) 22%, transparent);
+  background: color-mix(in oklab, var(--abyss, #0c1030) 82%, transparent);
+  padding: 0.75rem 1.25rem;
+  backdrop-filter: blur(10px);
+}
+.map-cartouche-wordmark {
+  display: block;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 1.75rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  color: var(--label, #ece8ff);
+}
+.map-cartouche-summary {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-dim, #9097bf);
+}
+.map-cartouche-summary b {
+  color: var(--text, #d9dcf2);
+  font-weight: 500;
+}
+
+.map-legend {
   position: absolute;
   left: 1rem;
-  top: 1rem;
+  bottom: 1rem;
+  z-index: 10;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ink, #aab6ea) 22%, transparent);
+  background: color-mix(in oklab, var(--abyss, #0c1030) 82%, transparent);
+  padding: 0.375rem;
+  backdrop-filter: blur(10px);
+}
+/* Two columns keep the legend compact so it never reaches the bottom-right
+   zoom pill on a 1280px viewport (reference uses the same grid on mobile). */
+.map-legend-items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+}
+.map-legend button {
+  display: grid;
+  grid-template-columns: 40px auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 4px 12px 4px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: var(--text, #d9dcf2);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+.map-legend button:hover {
+  background: rgba(170, 182, 234, 0.08);
+}
+.map-legend button[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--ink, #aab6ea) 22%, transparent);
+  background: rgba(170, 182, 234, 0.12);
+}
+.map-legend button:focus-visible {
+  outline: 2px solid var(--ink, #aab6ea);
+  outline-offset: 1px;
+}
+.map-legend .map-effect-mini {
+  width: 40px;
+  height: 40px;
+  display: block;
+  overflow: hidden;
+}
+.map-legend .map-legend-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim, #9097bf);
+}
+
+.map-drawer {
+  position: absolute;
+  top: 3.75rem;
+  right: 1rem;
+  z-index: 20;
+  width: 21.875rem;
+  /* Stop above the bottom-right zoom pill (bottom: 1rem + ~40px pill) so the
+     two never overlap while the drawer is open. */
+  max-height: calc(100% - 8.75rem);
+  overflow: auto;
+  padding: 1.375rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ink, #aab6ea) 22%, transparent);
+  background: color-mix(in oklab, var(--abyss, #0c1030) 88%, transparent);
+  backdrop-filter: blur(10px);
+  transform: translateX(calc(100% + 30px));
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+}
+.map-drawer.open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.map-drawer-close {
+  position: absolute;
+  top: 0.625rem;
+  right: 0.625rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim, #9097bf);
+  font-size: 1.375rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.map-drawer-close:hover {
+  background: rgba(170, 182, 234, 0.1);
+  color: var(--text, #d9dcf2);
+}
+.map-drawer-title {
+  margin: 0 2rem 0.125rem 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 1.75rem;
+  line-height: 1.1;
+  color: var(--label, #ece8ff);
+}
+.map-drawer-role {
+  margin: 0 0 0.875rem;
+  color: var(--text-dim, #9097bf);
+  font-size: 0.9375rem;
+}
+.map-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 4px 12px 4px 10px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--c, #8fb8ff) 16%, transparent);
+  color: var(--c, #8fb8ff);
+  border: 1px solid color-mix(in srgb, var(--c, #8fb8ff) 40%, transparent);
+}
+.map-status-pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--c, #8fb8ff);
+}
+.map-drawer h3 {
+  margin: 1.25rem 0 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-dim, #9097bf);
+}
+.map-drawer p {
+  margin: 0;
+}
+.map-drawer-task {
+  color: var(--text, #d9dcf2);
+}
+.map-drawer-task-status {
+  margin-left: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-dim, #9097bf);
+}
+.map-drawer-ask {
+  margin-top: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  border-left: 2px solid var(--need, #ff7ad9);
+  background: rgba(255, 122, 217, 0.07);
+  border-radius: 0 0.5rem 0.5rem 0;
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  color: var(--label, #ece8ff);
+}
+.map-drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.map-drawer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5625rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--ink, #aab6ea) 22%, transparent);
+  background: rgba(170, 182, 234, 0.08);
+  color: var(--text, #d9dcf2);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+.map-drawer-link:hover {
+  background: rgba(170, 182, 234, 0.16);
+}
+.map-drawer-link:focus-visible {
+  outline: 2px solid var(--ink, #aab6ea);
+  outline-offset: 2px;
+}
+
+/* --- Control pill: bottom-right, clear of the cartouche (top-left) and the
+   legend (bottom-left). The in-world compass lives at the world's bottom-right;
+   the pill floats above the viewport chrome, not over the heading chip. --- */
+.map-control-pill {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -295,271 +786,6 @@ html.velaris-reduced-motion *::after {
 }
 .map-empty-link:hover {
   background: color-mix(in oklab, var(--color-primary) 90%, black);
-}
-
-/* --- Castle chrome (static fills via inline palette vars) --- */
-.castle {
-  position: absolute;
-  /* Tiny non-zero box (kept visible for hit-testing + e2e) — the anchor
-     point; geometry is drawn via children positioned around it. */
-  width: 2px;
-  height: 2px;
-  /* decorative children are non-interactive; only the hit target captures. */
-  opacity: 1;
-}
-.castle > * {
-  pointer-events: none;
-}
-.castle-hit {
-  position: absolute;
-  left: -44px;
-  top: -44px;
-  width: 88px;
-  height: 88px;
-  border-radius: 9999px;
-  pointer-events: auto;
-  z-index: 5;
-}
-.castle-shadow {
-  position: absolute;
-  left: -34px;
-  top: 26px;
-  width: 68px;
-  height: 16px;
-  border-radius: 9999px;
-  background: rgba(5, 8, 25, 0.5);
-  filter: blur(5px);
-}
-.castle-keep {
-  position: absolute;
-  left: -24px;
-  top: -64px;
-  width: 48px;
-  height: 78px;
-  background: linear-gradient(135deg, var(--keep-light), var(--keep-base) 55%, var(--keep-dark));
-  border: 1px solid #0008;
-  border-radius: 2px;
-  box-shadow: inset 0 -6px 10px rgba(0, 0, 0, 0.28);
-}
-.castle-crenellation {
-  position: absolute;
-  left: -3px;
-  top: -8px;
-  display: flex;
-  gap: 3px;
-}
-.castle-merlon {
-  width: calc((48px + 6px) / 5 - 3px);
-  height: 8px;
-  background: linear-gradient(135deg, var(--keep-light), var(--keep-dark));
-  border: 1px solid #0008;
-  border-radius: 1px;
-}
-.castle-windows {
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  top: 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-}
-.castle-window {
-  width: 9px;
-  height: 11px;
-  border-radius: 1px;
-  background: var(--window-glow, #ffd97a);
-  box-shadow: 0 0 6px 1px rgba(255, 217, 122, 0.55);
-  opacity: 0.95;
-}
-.castle-gate {
-  position: absolute;
-  left: 50%;
-  bottom: 2px;
-  width: 14px;
-  height: 20px;
-  transform: translateX(-50%);
-  background: #101636;
-  border: 1px solid #2c3768;
-  border-radius: 7px 7px 2px 2px;
-}
-.castle-chimney {
-  position: absolute;
-  left: 8px;
-  top: -80px;
-  width: 9px;
-  height: 14px;
-  background: linear-gradient(135deg, var(--keep-light), var(--keep-dark));
-  border: 1px solid #0008;
-  border-radius: 1px;
-}
-.castle-tower {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.castle-tower-left {
-  left: -34px;
-  top: -42px;
-}
-.castle-tower-right {
-  right: -34px;
-  top: -42px;
-}
-.castle-tower-roof {
-  width: 0;
-  height: 0;
-  border-left: 13px solid transparent;
-  border-right: 13px solid transparent;
-  border-bottom: 16px solid var(--roof-dark);
-}
-.castle-tower-shaft {
-  width: 18px;
-  height: 40px;
-  background: linear-gradient(135deg, var(--tower-light), var(--tower-base) 55%, var(--tower-dark));
-  border: 1px solid #0008;
-  border-radius: 1px;
-}
-.castle-label {
-  position: absolute;
-  left: 50%;
-  top: 40px;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--color-velaris-silver-muted);
-  text-align: center;
-}
-
-/* --- Shared status primitives (bird + smoke, reused from Phase 3) --- */
-.bird-body {
-  background: #e8c66b;
-}
-.bird-wing-left,
-.bird-wing-right {
-  background: rgba(232, 198, 107, 0.6);
-}
-.smoke-puff-circle {
-  background: rgba(94, 207, 184, 0.75);
-}
-
-/* --- Messenger bird silhouette (positioned above the keep) --- */
-.messenger-bird {
-  position: absolute;
-  left: 50%;
-  top: -102px;
-  width: 20px;
-  height: 12px;
-  transform: translateX(-50%);
-  transform-origin: center bottom;
-}
-.messenger-bird .bird-body {
-  position: absolute;
-  left: 3px;
-  top: 4px;
-  width: 14px;
-  height: 7px;
-  border-radius: 9999px;
-}
-.messenger-bird .bird-wing-left {
-  position: absolute;
-  left: 0;
-  top: 0;
-}
-.messenger-bird .bird-wing-right {
-  position: absolute;
-  right: 0;
-  top: 0;
-}
-/* Wing shapes */
-.messenger-bird .bird-wing-left,
-.messenger-bird .bird-wing-right {
-  width: 7px;
-  height: 4px;
-  border-radius: 9999px 9999px 0 0;
-  transform-origin: center bottom;
-}
-
-/* --- State styles --- */
-/* Dimmed: disabled/archived houses — faded, no animations. */
-.castle[data-state="dimmed"] {
-  opacity: 0.45;
-}
-.castle[data-state="dimmed"] .castle-window,
-.castle[data-state="dimmed"] .bird-dot {
-  opacity: 0.25;
-}
-
-/* Planning: pulsing purple window glow. */
-.castle[data-state="planning"] .castle-window {
-  animation: velaris-planning-pulse 2s ease-in-out infinite;
-}
-
-/* Working: teal smoke rising off the chimney. */
-.castle[data-state="working"] .smoke-puff {
-  position: absolute;
-  left: 11px;
-  top: -92px;
-}
-.castle[data-state="working"] .smoke-puff .smoke-puff-circle {
-  display: block;
-  width: 9px;
-  height: 9px;
-  border-radius: 9999px;
-  transform-origin: center;
-  opacity: 0;
-  animation: velaris-smoke-rise 2.8s ease-out infinite;
-}
-.castle[data-state="working"] .smoke-puff:nth-child(1) .smoke-puff-circle { animation-delay: 0s; }
-.castle[data-state="working"] .smoke-puff:nth-child(2) .smoke-puff-circle { animation-delay: 0.9s; }
-.castle[data-state="working"] .smoke-puff:nth-child(3) .smoke-puff-circle { animation-delay: 1.8s; }
-
-/* Awaiting approval / input: gold messenger-bird hoverbob + wing flap. */
-.castle[data-state="awaiting_approval"] .messenger-bird,
-.castle[data-state="awaiting_input"] .messenger-bird {
-  transform-origin: center;
-  animation: velaris-bird-hoverbob 3s ease-in-out infinite;
-}
-.castle[data-state="awaiting_approval"] .bird-wing-left,
-.castle[data-state="awaiting_approval"] .bird-wing-right,
-.castle[data-state="awaiting_input"] .bird-wing-left,
-.castle[data-state="awaiting_input"] .bird-wing-right {
-  transform-origin: center;
-  animation: velaris-bird-flap 0.7s ease-in-out infinite;
-}
-
-/* Pending-approval gold bird dot above the roof even while idle/working. */
-.bird-dot {
-  position: absolute;
-  left: calc(50% + 16px);
-  top: -76px;
-  width: 6px;
-  height: 6px;
-  border-radius: 9999px;
-}
-
-/* --- Keyframes (transform/opacity only) --- */
-@keyframes velaris-planning-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-@keyframes velaris-smoke-rise {
-  0% { opacity: 0; transform: translateY(0) scale(0.4); }
-  20% { opacity: 0.9; }
-  100% { opacity: 0; transform: translateY(-14px) scale(1); }
-}
-
-@keyframes velaris-bird-flap {
-  0%, 100% { transform: scaleY(1); }
-  50% { transform: scaleY(0.3); }
-}
-@keyframes velaris-bird-hoverbob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
 }
 
 /* --- Firework burst (completed) — translates particles to var(--fx)/var(--fy). --- */
@@ -645,24 +871,8 @@ html.velaris-reduced-motion *::after {
 /* transform/opacity only; reduced-motion static variants.               */
 /* =================================================================== */
 
-/* Gold/gilded High Lord castle: override the palette vars with fixed gold
-   tones so the throne reads distinctly at the city heart. */
-.castle[data-kind="high_lord"] {
-  --keep-light: #f6dfa0;
-  --keep-base: #e8c66b;
-  --keep-dark: #b8923f;
-  --roof-light: #f8e6b0;
-  --roof-base: #ddb85a;
-  --roof-dark: #9a7830;
-  --tower-light: #f2d793;
-  --tower-base: #d9b75f;
-  --tower-dark: #a98a3c;
-  --window-glow: #fff0b3;
-  --window-glow-soft: #ffd97a;
-}
-.castle[data-kind="high_lord"] .castle-label {
-  color: #e8c66b;
-}
+/* High Lord gilding now lives on `.map-island-house[data-kind="high_lord"]`
+   (see the archipelago map block above). */
 
 /* Burning overlay while the High Lord's latest plan is aborted (D4e(b)).
    Positioned over the keep; embers via opacity/translate flicker. */
