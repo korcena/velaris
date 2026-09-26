@@ -1,12 +1,16 @@
 /**
- * Unit tests — worktree isolation scaffold (Phase 5 Stage I — Q7, default OFF).
+ * Unit tests — worktree isolation flag (Phase 5 Stage I — Q7, default OFF).
  *
- * This stage is deliberately INERT: `experimental.worktreeIsolation` defaults to
- * false and, when off, NO code path invokes the OpenCode `/experimental/worktree`
- * endpoint (unverifiable without a live server). We prove:
- *  - the flag defaults to false (off path ⇒ no behavior change);
- *  - when the flag is ON the scaffold method's request shape is asserted. The
- *    live isolation behaviour is explicitly NOT verified.
+ * The flag `experimental.worktreeIsolation` defaults to false. While OFF (the
+ * default, and the only state wired into the engine) NO code path invokes the
+ * OpenCode `/experimental/worktree` endpoints, so normal execution is unchanged.
+ * We prove:
+ *  - the flag defaults to false and only an explicit `=== true` enables it;
+ *  - the new OpenCode client worktree methods exist but are never auto-invoked
+ *    on construction.
+ *
+ * Detailed request-shape coverage of the client worktree methods lives in
+ * `worktree-client.test.ts`; the live round-trip is the opt-in `@real` test.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
@@ -65,32 +69,20 @@ describe("getWorktreeIsolationEnabled (Stage I scaffold)", () => {
   });
 });
 
-describe("OpencodeClient.worktree — scaffold request shape only (no live claim)", () => {
-  it("is inert by default: the method exists but is not auto-invoked by the client", () => {
+describe("OpencodeClient worktree methods — no live claim, flag off by default", () => {
+  it("exposes the worktree methods but never auto-invokes them on construction", () => {
     let called = false;
     const fetchImpl = vi.fn(async () => {
       called = true;
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const client = new OpencodeClient({ baseUrl: "http://127.0.0.1:4096", fetchImpl });
-    expect(typeof client.worktree).toBe("function");
-    // Constructing the client never calls worktree (the flag-off path is a no-op).
+    expect(typeof client.createWorktree).toBe("function");
+    expect(typeof client.listWorktrees).toBe("function");
+    expect(typeof client.resetWorktree).toBe("function");
+    expect(typeof client.deleteWorktree).toBe("function");
+    // Constructing the client never calls the endpoint (the flag-off path is a no-op).
     expect(called).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("invokes GET /experimental/worktree?directory= when a caller opts in (request shape only, unverified)", async () => {
-    const fetchImpl = vi.fn(async (url: RequestInfo | URL) =>
-      new Response(JSON.stringify({ ok: true, isolated: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    ) as unknown as typeof fetch;
-    const client = new OpencodeClient({ baseUrl: "http://127.0.0.1:4096", fetchImpl });
-    const res = await client.worktree("/tmp/work");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const calledWith = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(String(calledWith)).toMatch(/\/experimental\/worktree\?directory=%2Ftmp%2Fwork$/);
-    expect(res).toMatchObject({ ok: true, isolated: true });
   });
 });

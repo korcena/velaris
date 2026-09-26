@@ -235,6 +235,10 @@ export const executionSessions = sqliteTable(
     provider: text("provider").notNull().default("opencode"),
     modelId: text("model_id").notNull().default(""),
     directory: text("directory"),
+    /** Phase 6.2 Stage S1: OpenCode worktree this session runs in (nullable). */
+    worktreeDirectory: text("worktree_directory"),
+    /** Phase 6.2 Stage S1: branch created for the session's worktree (nullable). */
+    worktreeBranch: text("worktree_branch"),
     lastError: text("last_error"),
     costTotal: real("cost_total").notNull().default(0),
     inputTokens: integer("input_tokens").notNull().default(0),

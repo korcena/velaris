@@ -264,6 +264,10 @@ export interface ExecutionSessionDto {
   provider: string;
   modelId: string;
   directory: string | null;
+  /** Phase 6.2 Stage S1: OpenCode worktree this session ran in (engine-internal). */
+  worktreeDirectory: string | null;
+  /** Phase 6.2 Stage S1: branch of the session's worktree (engine-internal). */
+  worktreeBranch: string | null;
   lastError: string | null;
   costTotal: number;
   inputTokens: number;

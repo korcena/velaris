@@ -261,4 +261,30 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("0009 adds nullable worktree columns (additive); pre-existing session survives with NULLs", () => {
+    if (!upgraded) return;
+    const db = new Database(upgradePath);
+    db.pragma("foreign_keys = ON");
+
+    const cols = db.prepare("PRAGMA table_info(execution_sessions)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const dir = cols.find((c) => c.name === "worktree_directory");
+    const branch = cols.find((c) => c.name === "worktree_branch");
+    expect(dir).toBeTruthy();
+    expect(branch).toBeTruthy();
+    expect(dir!.notnull).toBe(0);
+    expect(branch!.notnull).toBe(0);
+
+    // The seeded pre-existing session survives; worktree columns are NULL.
+    expect(count(db, "execution_sessions", "id='sess-p6'")).toBe(1);
+    const session = db
+      .prepare("SELECT worktree_directory, worktree_branch FROM execution_sessions WHERE id='sess-p6'")
+      .get() as { worktree_directory: string | null; worktree_branch: string | null };
+    expect(session).toEqual({ worktree_directory: null, worktree_branch: null });
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });

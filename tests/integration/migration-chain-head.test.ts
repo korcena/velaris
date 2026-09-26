@@ -410,6 +410,38 @@ describe("full migration chain from the Phase 1 schema head", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("the 0009 execution_sessions.worktree_* migration is ADDITIVE (ADD COLUMN only, no DROP/rebuild/PRAGMA)", () => {
+    const sql = fs.readFileSync(
+      path.join(DRIZZLE_DIR, "0009_damp_dark_phoenix.sql"),
+      "utf8",
+    );
+    // Phase 6.2 Stage S1: purely additive nullable columns — no rebuild.
+    expect(sql).not.toMatch(/\bDROP\b/i);
+    expect(sql).not.toMatch(/CREATE\s+TABLE/i);
+    expect(sql).not.toMatch(/PRAGMA/i);
+    const statements = splitStatements(sql);
+    expect(statements).toHaveLength(2);
+    for (const stmt of statements) expect(stmt).toMatch(/^ALTER TABLE `execution_sessions` ADD\b/i);
+    expect(sql).toMatch(/ADD `worktree_directory` text/);
+    expect(sql).toMatch(/ADD `worktree_branch` text/);
+  });
+
+  it("0009 lands nullable execution_sessions.worktree_directory / worktree_branch", () => {
+    const db = new Database(dbPath);
+    const cols = db.prepare("PRAGMA table_info(execution_sessions)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const dir = cols.find((c) => c.name === "worktree_directory");
+    const branch = cols.find((c) => c.name === "worktree_branch");
+    expect(dir).toBeTruthy();
+    expect(branch).toBeTruthy();
+    expect(dir!.notnull).toBe(0);
+    expect(branch!.notnull).toBe(0);
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });
 
 /* ================================================================== */
@@ -498,6 +530,16 @@ describe("execution history survives the in-chain 0004 rebuild + 0005", () => {
       action: string;
     };
     expect(row).toEqual({ actor: "user", action: "create" });
+    db.close();
+  });
+
+  it("0009 leaves pre-existing session worktree columns NULL and preserves the row", () => {
+    const db = new Database(dbPath);
+    const session = db
+      .prepare("SELECT worktree_directory, worktree_branch FROM execution_sessions WHERE id='s1'")
+      .get() as { worktree_directory: string | null; worktree_branch: string | null };
+    expect(session).toEqual({ worktree_directory: null, worktree_branch: null });
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
 });

@@ -18,7 +18,16 @@
  *   GET  /question                                     listPendingQuestions()
  *   POST /question/{requestID}/reply                   replyQuestion()
  *   POST /question/{requestID}/reject                  rejectQuestion()
+ *   POST /experimental/worktree {name?,startCommand?}  createWorktree()
+ *   GET  /experimental/worktree                        listWorktrees()
+ *   POST /experimental/worktree/reset {directory}      resetWorktree()
+ *   DELETE /experimental/worktree {directory}          deleteWorktree()
  *   GET  /event?directory=<abs>                        subscribeEvents()  (SSE)
+ *
+ * The experimental worktree shapes above were live-verified against the real
+ * server; a live round-trip is exercised by the opt-in `@real` test
+ * (`tests/unit/opencode-worktree-real.test.ts`), which is skipped unless a
+ * server is reachable. It never runs as part of the default gate.
  *
  * Explicit limitations (never simulated):
  *  - NO pause/resume endpoints exist. abortSession is the only interruption.
@@ -77,6 +86,13 @@ export interface PromptOptions {
   /** Whether to fire-and-forget (prompt_async). Default false → use /message.
    * The engine prefers prompt_async for streaming. */
   noReply?: boolean;
+}
+
+/** A freshly created OpenCode worktree (`POST /experimental/worktree`). */
+export interface WorktreeInfo {
+  name: string;
+  branch: string;
+  directory: string;
 }
 
 export class OpencodeClient {
@@ -324,25 +340,51 @@ export class OpencodeClient {
   }
 
   /**
-   * EXPERIMENTAL WORKTREE ISOLATION SCAFFOLD (Phase 5 Stage I — decision Q7,
-   * default OFF).
+   * EXPERIMENTAL WORKTREE ISOLATION (Phase 6.2 Stage S1).
    *
-   * `GET /experimental/worktree` is an OpenCode server endpoint that is NOT in
-   * this client's verified set (it is experimental and unverifiable without a
-   * live server on this machine). This method is deliberately an INERT SCAFFOLD:
-   * it is only ever invoked when the `experimental.worktreeIsolation` setting is
-   * ON, and it makes NO claim about live behaviour. When the flag is off (the
-   * default, and the only tested state) no code path calls it, so existing
-   * execution is never affected.
+   * OpenCode exposes an experimental git-worktree endpoint used to isolate an
+   * execution in its own checkout. The shapes below were live-verified against
+   * the real server:
+   *   - create: POST   /experimental/worktree        {name?, startCommand?} → {name, branch, directory}
+   *   - list:   GET    /experimental/worktree        → string[] of absolute dirs
+   *   - reset:  POST   /experimental/worktree/reset  {directory} → boolean
+   *   - delete: DELETE /experimental/worktree        {directory} → boolean
    *
-   * The request shape is best-effort and documented as unverified.
+   * These are only called when the `experimental.worktreeIsolation` flag is ON
+   * (default OFF); when off, no code path invokes them, so normal execution is
+   * unaffected.
    */
-  async worktree(directory: string): Promise<{ ok?: boolean; isolated?: boolean }> {
-    const query = `?directory=${encodeURIComponent(directory)}`;
-    return await this.request<{ ok?: boolean; isolated?: boolean }>(
-      "GET",
-      `/experimental/worktree${query}`,
-    );
+  async createWorktree(opts?: {
+    name?: string;
+    startCommand?: string;
+  }): Promise<WorktreeInfo> {
+    const body: Record<string, unknown> = {};
+    if (opts?.name !== undefined) body.name = opts.name;
+    if (opts?.startCommand !== undefined) body.startCommand = opts.startCommand;
+    const parsed = await this.request<WorktreeInfo>("POST", "/experimental/worktree", body);
+    return {
+      name: typeof parsed?.name === "string" ? parsed.name : "",
+      branch: typeof parsed?.branch === "string" ? parsed.branch : "",
+      directory: typeof parsed?.directory === "string" ? parsed.directory : "",
+    };
+  }
+
+  /** GET /experimental/worktree → absolute worktree directories (non-array ⇒ []). */
+  async listWorktrees(): Promise<string[]> {
+    const body = await this.request<unknown>("GET", "/experimental/worktree");
+    return Array.isArray(body) ? body.filter((d): d is string => typeof d === "string") : [];
+  }
+
+  /** POST /experimental/worktree/reset {directory} → boolean. */
+  async resetWorktree(directory: string): Promise<boolean> {
+    const body = await this.request<unknown>("POST", "/experimental/worktree/reset", { directory });
+    return isTruthySuccess(body);
+  }
+
+  /** DELETE /experimental/worktree {directory} → boolean. */
+  async deleteWorktree(directory: string): Promise<boolean> {
+    const body = await this.request<unknown>("DELETE", "/experimental/worktree", { directory });
+    return isTruthySuccess(body);
   }
 
   async getSessionDiff(id: string): Promise<SessionDiffEntry[]> {
@@ -553,8 +595,25 @@ export class OpencodeClient {
   }
 }
 
-/** Tolerantly coerce an OpenCode session object into our SessionInfo type. */
-function normalizeSessionInfo(input: Record<string, unknown>): SessionInfo {
+/**
+ * Worktree reset/delete succeed when the server reports `true`. Some server
+ * builds may instead answer `{ok:true}` (or another truthy object); treat any
+ * truthy body as success, and only `false`/`null`/`undefined` as failure.
+ */
+function isTruthySuccess(body: unknown): boolean {
+  if (body === true) return true;
+  if (body === null || body === undefined || body === false) return false;
+  if (typeof body === "object") {
+    const rec = body as Record<string, unknown>;
+    // An explicit `ok` flag wins when present (e.g. `{ok:true}` / `{ok:false}`).
+    if ("ok" in rec) return rec.ok === true;
+    // Otherwise any non-empty payload is treated as a tolerant success marker.
+    return Object.keys(rec).length > 0;
+  }
+  return Boolean(body);
+}
+
+/** Tolerantly coerce an OpenCode session object into our SessionInfo type. */function normalizeSessionInfo(input: Record<string, unknown>): SessionInfo {
   const tokensMap = (input.tokens ?? {}) as Record<string, unknown>;
   const cache = (tokensMap.cache ?? {}) as Record<string, unknown>;
   const model = (input.model ?? {}) as Record<string, unknown>;

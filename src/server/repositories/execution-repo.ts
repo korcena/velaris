@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { eq, and, sql, desc, gt, gte, inArray, sum, count } from "drizzle-orm";
+import { eq, and, sql, desc, gt, gte, inArray, sum, count, isNotNull } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import {
   executionSessions,
@@ -63,6 +63,9 @@ export interface CreateSessionInput {
   provider: string;
   modelId: string;
   directory?: string | null;
+  /** Phase 6.2 Stage S1 (engine-only): OpenCode worktree mapping. */
+  worktreeDirectory?: string | null;
+  worktreeBranch?: string | null;
 }
 
 export function createExecutionSession(
@@ -79,6 +82,8 @@ export function createExecutionSession(
       provider: input.provider,
       modelId: input.modelId,
       directory: input.directory ?? null,
+      worktreeDirectory: input.worktreeDirectory ?? null,
+      worktreeBranch: input.worktreeBranch ?? null,
       status: "pending",
       startedAt: new Date().toISOString(),
     })
@@ -148,6 +153,8 @@ function sessionRowToDto(row: ExecutionSessionRow): ExecutionSessionDto {
     provider: row.provider,
     modelId: row.modelId,
     directory: row.directory ?? null,
+    worktreeDirectory: row.worktreeDirectory ?? null,
+    worktreeBranch: row.worktreeBranch ?? null,
     lastError: row.lastError ?? null,
     costTotal: row.costTotal,
     inputTokens: row.inputTokens,
@@ -204,6 +211,42 @@ export function setSessionStatus(
 
 /** Alias used by the engine's reconciliation paths. */
 export const setExecutionSessionStatus = setSessionStatus;
+
+/**
+ * Engine-only (Phase 6.2 Stage S1): persist the worktree mapping for a session
+ * after createWorktree succeeds. Both columns move together; `null` clears.
+ */
+export function setSessionWorktree(
+  db: VelarisDb,
+  sessionId: string,
+  opts: { directory: string | null; branch: string | null },
+): void {
+  db.update(executionSessions)
+    .set({
+      worktreeDirectory: opts.directory,
+      worktreeBranch: opts.branch,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(executionSessions.id, sessionId))
+    .run();
+}
+
+/**
+ * Engine-only (Phase 6.2 Stage S1): every session that has a stored worktree
+ * directory, as DTOs (newest first). Used by the boot-time orphan sweep to know
+ * which worktrees are still referenced. Returns `ExecutionSessionDto[]` so the
+ * caller reads `status` + `worktreeDirectory`/`worktreeBranch` without a second
+ * lookup.
+ */
+export function listSessionsWithWorktrees(db: VelarisDb): ExecutionSessionDto[] {
+  return db
+    .select()
+    .from(executionSessions)
+    .where(isNotNull(executionSessions.worktreeDirectory))
+    .orderBy(desc(executionSessions.createdAt))
+    .all()
+    .map(sessionRowToDto);
+}
 
 /* ================================================================== */
 /* execution_events (engine writes only)                              */
