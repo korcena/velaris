@@ -182,13 +182,17 @@ Verify: `npx tsc --noEmit`; write `tests/unit/route-quest.test.ts` (Stage 6) and
   3. `const decision = chooseQuestHouse({ title: task.title, type: task.type, description: task.description, workingDirectory: task.workingDirectory, projectDirectory: projectDirectoryForTask(db, task) }, houses, effectiveAllowlists);`
   4. `decision.houseId != null` (routed **or** escalated to HL) → `setTaskHouse(db, task.id, decision.houseId)` and emit the routing event (Stage 4), then `return`.
   5. Terminal (`houseId == null`) → `setTaskStatus(db, task.id, "failed", msg)` +
-     `createExecutionEvent({ taskId, houseId: null, rawType: "task_failed", type: "task_failed", payload: { error: msg, routing: { houseId: null, escalated: decision.escalated, reason: decision.reason, score: decision.score } } })`.
+     `createExecutionEvent({ taskId, houseId: null, rawType: "task_failed", type: "task_failed", payload: { error: msg, routing: { houseId: null, escalated: decision.escalated, reason: decision.reason, score: decision.score } } })`,
+     **and a `failure` notification** (mirroring `failPlanning`/`persistTerminal` — other failure
+     seams surface a notification, so routing failures must too).
      `msg` from `routingFailureMessage(decision.reason)`:
      - `"no_high_lord"` → `"No house can run this quest: create an active house or restore the High Lord."`
-     - `"no_directory"` → reuse `WORKSPACE_UNREGISTERED_MESSAGE` (`"Register this directory as a project, or set a workspace allowlist on the house."`).
-  - `findHighLordHouse` is imported for consistency/tests but the decision already carries `hl.id`;
-    prefer the decision's `houseId` as the source of truth (flag A2 if a reviewer prefers a
-    re-lookup).
+     - `"no_directory"` → `"This quest has no working directory and no project directory — set one before the court can plan it."`
+       (do **NOT** reuse `WORKSPACE_UNREGISTERED_MESSAGE`: there is no directory to register in this
+       case; that message is only correct where a directory exists but is unregistered).
+   - `findHighLordHouse` is imported for consistency/tests but the decision already carries `hl.id`;
+     prefer the decision's `houseId` as the source of truth (flag A2 if a reviewer prefers a
+     re-lookup).
 
 Rationale for pre-claim (spec): the "wait for OpenCode" behavior falls out of the existing health
 gate for free; no claim → requeue churn; covers quests from any source.
