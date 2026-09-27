@@ -97,4 +97,43 @@ test.describe("Phase 6 — archives search", () => {
     db.prepare("DELETE FROM houses WHERE id LIKE ?").run(`${houseId}%`);
     db.close();
   });
+
+  test("date range defaults to the last 7 days and expands to all time", async ({ page }) => {
+    // A completed task old enough to fall outside the default 7-day window
+    // (no house needed — house_id is nullable on tasks).
+    const taskId = `e2e-arch-old-${Date.now()}`;
+    const oldStamp = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const db = openDb();
+    db.prepare(
+      `INSERT INTO tasks (id, title, description, type, status, created_at, updated_at)
+       VALUES (?, 'Ancient Archive Marker', 'body', 'general', 'completed', ?, ?)`,
+    ).run(taskId, oldStamp, oldStamp);
+    db.close();
+
+    try {
+      await page.goto("/archives");
+      await expect(page.getByRole("heading", { name: "Archives", exact: true })).toBeVisible();
+
+      // The control is present and defaults to "Last 7 days".
+      const dateRange = page.getByTestId("archives-date-range");
+      await expect(dateRange).toBeVisible();
+      await expect(dateRange).toHaveText(/Last 7 days/);
+
+      // Under the default 7-day window the 60-day-old task is not returned.
+      await page.getByTestId("archives-search").fill("Ancient Archive Marker");
+      await expect(page.getByTestId("archives-total")).toHaveText(/0 archived/);
+      await expect(page.getByTestId("archives-empty")).toBeVisible();
+
+      // Switching to "All time" drops the `from` filter and reveals it.
+      await dateRange.click();
+      await page.getByRole("option", { name: "All time", exact: true }).click();
+      await expect(dateRange).toHaveText(/All time/);
+      await expect(page.getByTestId("archives-total")).toHaveText(/1 archived/);
+      await expect(page.getByText("Ancient Archive Marker")).toBeVisible();
+    } finally {
+      const cleanup = openDb();
+      cleanup.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
+      cleanup.close();
+    }
+  });
 });

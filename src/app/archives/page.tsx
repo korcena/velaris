@@ -44,6 +44,15 @@ const PAGE_SIZE = 25;
 const ALL = "all";
 const STATUSES: readonly TaskStatus[] = ["completed", "failed", "cancelled", "interrupted"];
 
+/** Date-range presets for the `from` filter; `null` days means "all time". */
+const DATE_RANGES = [
+  { value: "7d", label: "Last 7 days", days: 7 },
+  { value: "30d", label: "Last 30 days", days: 30 },
+  { value: "90d", label: "Last 90 days", days: 90 },
+  { value: "all", label: "All time", days: null },
+] as const;
+const DEFAULT_DATE_RANGE = "7d";
+
 export default function ArchivesPage() {
   const [entries, setEntries] = useState<ArchiveEntryDto[]>([]);
   const [total, setTotal] = useState(0);
@@ -53,16 +62,30 @@ export default function ArchivesPage() {
   const [query, setQuery] = useState("");
   const [houseId, setHouseId] = useState<string>(ALL);
   const [status, setStatus] = useState<string>(ALL);
+  const [dateRange, setDateRange] = useState<string>(DEFAULT_DATE_RANGE);
   const [page, setPage] = useState(0);
 
   const load = useCallback(
-    async (opts: { q: string; houseId: string; status: string; page: number }) => {
+    async (opts: {
+      q: string;
+      houseId: string;
+      status: string;
+      dateRange: string;
+      page: number;
+    }) => {
       setLoading(true);
       try {
         const params = new URLSearchParams();
         if (opts.q.trim()) params.set("q", opts.q.trim());
         if (opts.houseId !== ALL) params.set("houseId", opts.houseId);
         if (opts.status !== ALL) params.set("status", opts.status);
+        // Computed at fetch time (not render time) so a long-open page does not
+        // keep a stale cutoff. `to` is intentionally omitted (open-ended range).
+        const preset = DATE_RANGES.find((r) => r.value === opts.dateRange);
+        if (preset?.days != null) {
+          const from = new Date(Date.now() - preset.days * 24 * 60 * 60 * 1000).toISOString();
+          params.set("from", from);
+        }
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(opts.page * PAGE_SIZE));
 
@@ -91,8 +114,8 @@ export default function ArchivesPage() {
 
   // Refetch when filters/page change.
   useEffect(() => {
-    void load({ q: query, houseId, status, page });
-  }, [query, houseId, status, page, load]);
+    void load({ q: query, houseId, status, dateRange, page });
+  }, [query, houseId, status, dateRange, page, load]);
 
   /** Any filter change resets to page 0. */
   function applyFilter<T>(setter: (v: T) => void, value: T) {
@@ -110,7 +133,7 @@ export default function ArchivesPage() {
         actions={
           <Button
             variant="outline"
-            onClick={() => void load({ q: query, houseId, status, page })}
+            onClick={() => void load({ q: query, houseId, status, dateRange, page })}
             disabled={loading}
             data-testid="archives-refresh"
           >
@@ -164,6 +187,21 @@ export default function ArchivesPage() {
                 {STATUSES.map((s) => (
                   <SelectItem key={s} value={s}>
                     {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-[11rem] space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Date range</label>
+            <Select value={dateRange} onValueChange={(v) => applyFilter(setDateRange, v)}>
+              <SelectTrigger data-testid="archives-date-range">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DATE_RANGES.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {r.label}
                   </SelectItem>
                 ))}
               </SelectContent>
