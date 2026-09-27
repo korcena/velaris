@@ -52,13 +52,25 @@ chooseQuestHouse(
    - `emptyHouseAllowlist = h.configuration.workspaceAllowlist.length === 0`
    - `effective = effectiveAllowlists.get(h.id) ?? []`
    - `D = signal.workingDirectory ?? (emptyHouseAllowlist ? signal.projectDirectory : null)`
-   - viable iff `D != null ? isPathAllowed(D, effective) : (!emptyHouseAllowlist && effective.length > 0)`
+   - viable iff:
+     - `D != null` → `isPathAllowed(D, effective)`; else
+     - `D == null` → `!emptyHouseAllowlist && effective.length > 0 && isPathAllowed(effective[0], effective)`
+
+   The null-`D` branch must require `effective[0]` to itself be resolvable, because
+   `resolveWorkspace`'s fallback is `fallback && isPathAllowed(fallback, effectiveAllowlist)` — a
+   non-empty allowlist whose first entry does not exist on disk would otherwise route-then-fail.
 
    `signal.projectDirectory` is the task's own project directory (computed by the caller via
    `projectDirectoryForTask(db, task)`), NOT the first registered project. This is the only rule
    that cannot route-then-fail: an empty house allowlist with no working directory and no project
    yields `D = null` and is **not viable**; a non-empty house allowlist with no working directory
-   is viable via its `allowlist[0]` fallback. See corrected Resolved decision A1 below.
+   is viable only when its first entry is resolvable. See corrected Resolved decision A1 below.
+
+   **Multi-agent note (documented assumption):** the filter reads `h.configuration` (the default
+   agent), matching `resolveWorkspace`'s `resolveRuntimeAgent(db, house.id, task) ?? house.configuration`
+   **only because a house-less quest cannot carry a `task.agentId`** (the API enforces
+   `agentId ⇒ houseId`; see `src/app/api/tasks/route.ts`), so the resolved runtime agent is always
+   the house default. Add a code comment stating this; do not build a second resolution path.
 3. `scores = candidates.map(h => ({ h, score: scoreHouse({ houseHints: signal.description, type: signal.type, title: signal.title }, h) }))`.
    Sort score DESC, stable, so equal scores keep the input (roster) order.
 4. `best = scores[0]`, `runnerUpScore = scores[1]?.score ?? 0`.
@@ -326,7 +338,12 @@ run is required.
   with no `workingDirectory` and no project fails at claim. The filter must mirror `resolveWorkspace`
   exactly, including the task's **own** project directory. This means `QuestSignal` gains a
   `projectDirectory` field (computed by the engine caller via `projectDirectoryForTask(db, task)`),
-  and the pure module's null-directory viability uses `!emptyHouseAllowlist && effective.length > 0`.
+  and the pure module's null-directory viability uses
+  `!emptyHouseAllowlist && effective.length > 0 && isPathAllowed(effective[0], effective)` — the
+  final clause makes it a true mirror of `resolveWorkspace`'s `fallback && isPathAllowed(fallback, …)`
+  guard (a non-empty allowlist whose first entry does not exist must not route). The filter reads
+  `h.configuration` and assumes no `task.agentId`, which holds because a house-less quest cannot
+  carry an agent (API enforces `agentId ⇒ houseId`).
   Rationale: this is the only rule that cannot route-then-fail, satisfying the design's stated goal.
   (Original mis-resolution retained below for the record.)
 - **A1 (original, superseded).** "Empty effective allowlist + present dir excluded; null dir
