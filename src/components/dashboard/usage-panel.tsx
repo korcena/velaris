@@ -195,6 +195,9 @@ export function UsagePanel() {
             {/* Per-model breakdown */}
             <BreakdownBlock title="By model" rows={data.byModel} testId="usage-by-model" />
 
+            {/* Per-agent breakdown (Phase 6.2 S3) */}
+            <BreakdownBlock title="By agent" rows={data.byAgent} testId="usage-by-agent" />
+
             {/* Per-task breakdown (top N) */}
             <BreakdownBlock title="Top tasks" rows={data.byTask} testId="usage-by-task" />
           </>

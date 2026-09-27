@@ -24,12 +24,17 @@ export const USAGE_DEFAULT_TASK_LIMIT = 10;
 /** Hard cap for the per-task breakdown. */
 export const USAGE_MAX_TASK_LIMIT = 50;
 
-/** GET /api/usage?houseId=&taskId=&modelId=&provider=&from=&to=&bucket=&taskLimit= */
+/** GET /api/usage?houseId=&taskId=&modelId=&provider=&agentId=&from=&to=&bucket=&taskLimit= */
 export const usageQuerySchema = z.object({
   houseId: z.string().trim().min(1).max(200).optional(),
   taskId: z.string().trim().min(1).max(200).optional(),
   modelId: z.string().trim().min(1).max(300).optional(),
   provider: z.string().trim().min(1).max(120).optional(),
+  /**
+   * Phase 6.2 S3: restrict aggregation to one agent. Applied (via the session
+   * join) by `getUsageByAgent`; the no-join aggregates ignore it.
+   */
+  agentId: z.string().trim().min(1).max(200).optional(),
   /** ISO timestamps; compared lexically against the ISO text column. */
   from: z.string().trim().min(1).max(40).optional(),
   to: z.string().trim().min(1).max(40).optional(),

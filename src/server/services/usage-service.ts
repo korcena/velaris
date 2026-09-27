@@ -9,6 +9,7 @@
 
 import type { VelarisDb } from "@/lib/db";
 import {
+  getUsageByAgent,
   getUsageByHouse,
   getUsageByModel,
   getUsageByTask,
@@ -37,6 +38,7 @@ export function getUsageDashboard(db: VelarisDb, input: unknown): UsageDashboard
     taskId: parsed.taskId,
     modelId: parsed.modelId,
     provider: parsed.provider,
+    agentId: parsed.agentId,
     from: parsed.from,
     to: parsed.to,
   };
@@ -46,6 +48,7 @@ export function getUsageDashboard(db: VelarisDb, input: unknown): UsageDashboard
     byHouse: getUsageByHouse(db, filters),
     byModel: getUsageByModel(db, filters),
     byTask: getUsageByTask(db, filters, taskLimit),
+    byAgent: getUsageByAgent(db, filters),
     series: getUsageTimeSeries(db, bucket, filters),
     bucket,
     generatedAt: new Date().toISOString(),

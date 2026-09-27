@@ -30,7 +30,7 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { getUsageTotals } from "@/server/repositories/usage-repo";
+import { getUsageByAgent, getUsageTotals } from "@/server/repositories/usage-repo";
 
 let tmpDir: string;
 
@@ -63,6 +63,11 @@ function seed(): void {
       "INSERT INTO houses (id,name,description,kind,status) VALUES ('rec-house','Reconcile House','','agent','active')",
     )
     .run();
+  // Phase 6.2 S3: one agent; alternate attribution to also exercise the null
+  // (`__unassigned__`) bucket.
+  raw
+    .prepare("INSERT INTO agents (id,house_id,name,role) VALUES ('rec-agent','rec-house','Rec Agent','R')")
+    .run();
 
   const insertTask = raw.prepare(
     `INSERT INTO tasks (id, title, description, type, status, house_id, created_at, updated_at)
@@ -70,8 +75,8 @@ function seed(): void {
   );
   const insertSession = raw.prepare(
     `INSERT INTO execution_sessions
-       (id, task_id, house_id, status, provider, model_id, cost_total, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, created_at, updated_at)
-     VALUES (?, ?, 'rec-house', 'completed', ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+       (id, task_id, house_id, agent_id, status, provider, model_id, cost_total, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, created_at, updated_at)
+     VALUES (?, ?, 'rec-house', ?, 'completed', ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
   );
   const insertUsage = raw.prepare(
     `INSERT INTO usage_records
@@ -92,11 +97,14 @@ function seed(): void {
     n += 1;
     const taskId = `rec-t-${n}`;
     const sessionId = `rec-s-${n}`;
+    // Every other session gets a routed agent; the rest stay null (unassigned).
+    const agentId = n % 2 === 1 ? "rec-agent" : null;
     insertTask.run(taskId, `Reconcile Quest ${n}`, t, t);
     // Session mirror holds the SAME provider-reported cost as the usage row.
     insertSession.run(
       sessionId,
       taskId,
+      agentId,
       provider,
       modelId,
       cost,
@@ -188,5 +196,23 @@ describe("usage reconciliation with provider-reported session cost (±1%)", () =
     expect(totals.totalCost).not.toBeCloseTo(mirror.c * 2, 6);
     // And there is exactly one usage row per session, so session counts match.
     expect(totals.sessions).toBe(REPORTED_FIXTURES.length + ESTIMATED_FIXTURES.length);
+  });
+
+  it("AGENT GROUPING: the 1:1 session join does not double-count; sums equal totals", () => {
+    const raw = getRawDb();
+    const mirror = raw
+      .prepare("SELECT COALESCE(SUM(cost_total),0) AS c FROM execution_sessions")
+      .get() as { c: number };
+    const totals = getUsageTotals(getDb());
+    const byAgent = getUsageByAgent(getDb());
+
+    // `usage_records.session_id` → `execution_sessions.id` (PK) is 1:1, so the
+    // per-agent sum is the same as the mirror, not 2× it.
+    const agentSum = byAgent.reduce((a, r) => a + r.totalCost, 0);
+    expect(agentSum).toBeCloseTo(totals.totalCost, 9);
+    expect(agentSum).toBeCloseTo(mirror.c, 9);
+    expect(agentSum).not.toBeCloseTo(mirror.c * 2, 6);
+    // Sessions partition across the agent bucket + the null bucket.
+    expect(byAgent.reduce((a, r) => a + r.sessions, 0)).toBe(totals.sessions);
   });
 });

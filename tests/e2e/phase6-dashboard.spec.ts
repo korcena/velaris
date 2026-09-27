@@ -88,7 +88,7 @@ async function readBaseline(request: APIRequestContext): Promise<Baseline> {
  * 24h error/failure events + a fresh heartbeat. Uses the real web API to ensure
  * migrations/seed have run before raw inserts.
  */
-async function seedDashboard(request: APIRequestContext): Promise<{ houseId: string }> {
+async function seedDashboard(request: APIRequestContext): Promise<{ houseId: string; agentName: string }> {
   await request.get("/api/health");
   const db = openDb();
   const stamp = Date.now();
@@ -99,12 +99,23 @@ async function seedDashboard(request: APIRequestContext): Promise<{ houseId: str
     "INSERT INTO houses (id,name,description,kind,status,created_at,updated_at) VALUES (?,?,'','agent','active',?,?)",
   ).run(houseId, "E2E Dashboard House", now, now);
 
+  // Phase 6.2 S3: a named agent so the "By agent" block has an attributed row.
+  const agentId = `e2e-dash-agent-${stamp}`;
+  const agentName = `E2E Agent ${stamp}`;
+  db.prepare("INSERT INTO agents (id,house_id,name,role,created_at,updated_at) VALUES (?,?,?,'R',?,?)").run(
+    agentId,
+    houseId,
+    agentName,
+    now,
+    now,
+  );
+
   const insertTask = db.prepare(
     `INSERT INTO tasks (id,title,description,type,status,house_id,created_at,updated_at) VALUES (?,?,'','general',?,?,?,?)`,
   );
   const insertSession = db.prepare(
-    `INSERT INTO execution_sessions (id,task_id,house_id,status,provider,model_id,cost_total,input_tokens,output_tokens,created_at,updated_at)
-     VALUES (?,?,?,'completed',?,?,?,?,?,?,?)`,
+    `INSERT INTO execution_sessions (id,task_id,house_id,agent_id,status,provider,model_id,cost_total,input_tokens,output_tokens,created_at,updated_at)
+     VALUES (?,?,?,?,'completed',?,?,?,?,?,?,?)`,
   );
   const insertUsage = db.prepare(
     `INSERT INTO usage_records (id,session_id,task_id,house_id,model_id,provider,input_tokens,output_tokens,cost,estimated,created_at)
@@ -119,11 +130,24 @@ async function seedDashboard(request: APIRequestContext): Promise<{ houseId: str
     input: number,
     output: number,
     i: number,
+    attributedAgentId: string | null,
   ) => {
     const taskId = `e2e-dash-t-${stamp}-${i}`;
     const sessionId = `e2e-dash-s-${stamp}-${i}`;
     insertTask.run(taskId, `Dashboard Quest ${i}`, "completed", houseId, now, now);
-    insertSession.run(sessionId, taskId, houseId, provider, modelId, cost, input, output, now, now);
+    insertSession.run(
+      sessionId,
+      taskId,
+      houseId,
+      attributedAgentId,
+      provider,
+      modelId,
+      cost,
+      input,
+      output,
+      now,
+      now,
+    );
     insertUsage.run(
       `e2e-dash-u-${stamp}-${i}`,
       sessionId,
@@ -139,9 +163,10 @@ async function seedDashboard(request: APIRequestContext): Promise<{ houseId: str
     );
   };
 
-  addUsage("opencode", "glm-5.3", 1.5, false, 1000, 500, 1);
-  addUsage("opencode", "glm-5.3", 0.013, false, 100, 50, 2);
-  addUsage("ollama", "llama3.1:8b", 0.25, true, 800, 400, 3);
+  addUsage("opencode", "glm-5.3", 1.5, false, 1000, 500, 1, agentId);
+  addUsage("opencode", "glm-5.3", 0.013, false, 100, 50, 2, agentId);
+  // Null agent attribution → the honest `__unassigned__` bucket.
+  addUsage("ollama", "llama3.1:8b", 0.25, true, 800, 400, 3, null);
 
   // Queue depth + running count.
   for (let i = 1; i <= SEED_QUEUED; i++) {
@@ -167,7 +192,7 @@ async function seedDashboard(request: APIRequestContext): Promise<{ houseId: str
   ).run(now);
 
   db.close();
-  return { houseId };
+  return { houseId, agentName };
 }
 
 function cleanup(houseId: string): void {
@@ -186,7 +211,7 @@ test.describe("Phase 6 E/F — dashboard usage + monitoring panels", () => {
     request,
   }) => {
     const base = await readBaseline(request);
-    const { houseId } = await seedDashboard(request);
+    const { houseId, agentName } = await seedDashboard(request);
 
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Velaris", exact: true })).toBeVisible();
@@ -218,6 +243,13 @@ test.describe("Phase 6 E/F — dashboard usage + monitoring panels", () => {
     await expect(byModel.getByText("glm-5.3")).toBeVisible();
     await expect(byModel.getByText("llama3.1:8b")).toBeVisible();
     await expect(page.getByTestId("usage-estimated-badge").first()).toBeVisible();
+
+    // Per-agent breakdown (Phase 6.2 S3): the attributed agent renders by name,
+    // and the null-attribution row uses the honest unassigned label.
+    const byAgent = page.getByTestId("usage-by-agent");
+    await expect(byAgent).toBeVisible();
+    await expect(byAgent.getByText(agentName)).toBeVisible();
+    await expect(byAgent.getByText("House default / unassigned")).toBeVisible();
 
     // --- Engine Monitor panel (delta) ---
     const monitor = page.getByTestId("monitoring-panel");

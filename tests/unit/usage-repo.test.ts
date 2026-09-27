@@ -22,6 +22,7 @@ import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
 import {
+  getUsageByAgent,
   getUsageByHouse,
   getUsageByModel,
   getUsageByTask,
@@ -47,6 +48,8 @@ interface Row {
   reasoning: number;
   cacheRead: number;
   createdAt: string;
+  /** Phase 6.2 S3: the session's routed agent (null = unassigned history). */
+  agentId?: string | null;
 }
 
 /**
@@ -55,6 +58,10 @@ interface Row {
  *  - hA / llama3.1:8b / ollama: 0.25 + 0.5           = 0.75   (estimated)
  *  - hB / claude-x / opencode: 0.99999               = 0.99999 (reported)
  * Total = 3.26299.
+ *
+ * Agent attribution (Phase 6.2 S3): ut-1..ut-3 → `ua-1` (Agent One, 1.5130),
+ * ut-4 → `ua-2` (Agent Two, 0.25), ut-5/ut-6 → null (`__unassigned__`,
+ * 0.5 + 0.99999 = 1.49999). These partition the grand total exactly.
  */
 const ROWS: Row[] = [
   {
@@ -71,6 +78,7 @@ const ROWS: Row[] = [
     reasoning: 10,
     cacheRead: 5,
     createdAt: "2026-01-01T10:00:00.000Z",
+    agentId: "ua-1",
   },
   {
     houseId: "uh-a",
@@ -86,6 +94,7 @@ const ROWS: Row[] = [
     reasoning: 0,
     cacheRead: 0,
     createdAt: "2026-01-01T11:30:00.000Z",
+    agentId: "ua-1",
   },
   {
     houseId: "uh-a",
@@ -101,6 +110,7 @@ const ROWS: Row[] = [
     reasoning: 100,
     cacheRead: 20,
     createdAt: "2026-01-02T09:00:00.000Z",
+    agentId: "ua-1",
   },
   {
     houseId: "uh-a",
@@ -116,6 +126,7 @@ const ROWS: Row[] = [
     reasoning: 0,
     cacheRead: 0,
     createdAt: "2026-01-02T10:00:00.000Z",
+    agentId: "ua-2",
   },
   {
     houseId: "uh-a",
@@ -131,6 +142,7 @@ const ROWS: Row[] = [
     reasoning: 0,
     cacheRead: 0,
     createdAt: "2026-01-03T12:00:00.000Z",
+    agentId: null,
   },
   {
     houseId: "uh-b",
@@ -146,6 +158,7 @@ const ROWS: Row[] = [
     reasoning: 5,
     cacheRead: 4,
     createdAt: "2026-01-03T13:00:00.000Z",
+    agentId: null,
   },
 ];
 
@@ -166,14 +179,22 @@ function seed(): void {
     )
     .run();
 
+  // Phase 6.2 S3: two named agents under house A for the per-agent breakdown.
+  raw
+    .prepare("INSERT INTO agents (id,house_id,name,role) VALUES ('ua-1','uh-a','Agent One','R')")
+    .run();
+  raw
+    .prepare("INSERT INTO agents (id,house_id,name,role) VALUES ('ua-2','uh-a','Agent Two','R')")
+    .run();
+
   const insertTask = raw.prepare(
     `INSERT INTO tasks (id, title, description, type, status, house_id, created_at, updated_at)
      VALUES (?, ?, '', 'general', 'completed', ?, ?, ?)`,
   );
   const insertSession = raw.prepare(
     `INSERT INTO execution_sessions
-       (id, task_id, house_id, status, provider, model_id, cost_total, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, created_at, updated_at)
-     VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, task_id, house_id, agent_id, status, provider, model_id, cost_total, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertUsage = raw.prepare(
     `INSERT INTO usage_records
@@ -189,6 +210,7 @@ function seed(): void {
       sessionId,
       r.taskId,
       r.houseId,
+      r.agentId ?? null,
       r.provider,
       r.modelId,
       r.cost,
@@ -315,6 +337,61 @@ describe("usage breakdowns (per house / model / task)", () => {
   });
 });
 
+describe("usage per-agent breakdown (Phase 6.2 S3)", () => {
+  it("groups by session agent_id with names and the null bucket, ordered by cost", () => {
+    const rows = getUsageByAgent(getDb());
+    expect(rows).toHaveLength(3);
+    // Highest cost first: ua-1 (1.513), unassigned (1.49999), ua-2 (0.25).
+    // `agentId` stays null for the unassigned bucket; `key` is the sentinel.
+    expect(rows.map((r) => r.agentId)).toEqual(["ua-1", null, "ua-2"]);
+    expect(rows.map((r) => r.key)).toEqual(["ua-1", "__unassigned__", "ua-2"]);
+
+    const one = rows.find((r) => r.agentId === "ua-1")!;
+    expect(one.label).toBe("Agent One");
+    expect(one.totalCost).toBeCloseTo(1.513, 9);
+    expect(one.reportedCost).toBeCloseTo(1.513, 9);
+    expect(one.estimated).toBe(false);
+
+    const two = rows.find((r) => r.agentId === "ua-2")!;
+    expect(two.label).toBe("Agent Two");
+    expect(two.totalCost).toBeCloseTo(0.25, 9);
+    expect(two.estimatedCost).toBeCloseTo(0.25, 9);
+
+    // Null agent_id (ut-5 + ut-6) collapses to one honest bucket.
+    const unassigned = rows.find((r) => r.agentId === null)!;
+    expect(unassigned.key).toBe("__unassigned__");
+    expect(unassigned.label).toBe("House default / unassigned");
+    expect(unassigned.totalCost).toBeCloseTo(0.5 + 0.99999, 9);
+    expect(unassigned.sessions).toBe(2);
+  });
+
+  it("filter by agentId restricts the breakdown to that agent only", () => {
+    const rows = getUsageByAgent(getDb(), { agentId: "ua-1" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].agentId).toBe("ua-1");
+    expect(rows[0].totalCost).toBeCloseTo(1.513, 9);
+
+    // An unknown agent yields no rows.
+    expect(getUsageByAgent(getDb(), { agentId: "nope" })).toEqual([]);
+  });
+
+  it("does NOT join/apply agentId for the other (no-session) aggregates", () => {
+    // The non-join aggregates ignore agentId rather than silently returning
+    // empty: they still aggregate the full filtered set.
+    const totals = getUsageTotals(getDb(), { agentId: "ua-1" });
+    expect(totals.totalCost).toBeCloseTo(GRAND_TOTAL, 9);
+    expect(getUsageByHouse(getDb(), { agentId: "ua-1" })).toHaveLength(2);
+  });
+
+  it("PARTITION: byAgent sums to totals (null bucket included)", () => {
+    const totals = getUsageTotals(getDb()).totalCost;
+    const sum = (rows: { totalCost: number }[]) => rows.reduce((a, r) => a + r.totalCost, 0);
+    expect(sum(getUsageByAgent(getDb()))).toBeCloseTo(totals, 9);
+    // And the agent count is exact, proving the 1:1 session join did not fan out.
+    expect(getUsageByAgent(getDb()).reduce((a, r) => a + r.sessions, 0)).toBe(ROWS.length);
+  });
+});
+
 describe("usage partition invariant (double-count guard)", () => {
   it("byHouse / byModel / byTask each sum to totals", () => {
     const totals = getUsageTotals(getDb()).totalCost;
@@ -371,6 +448,7 @@ describe("usage dashboard service", () => {
     expect(dash.totals.totalCost).toBeCloseTo(GRAND_TOTAL, 9);
     expect(dash.byHouse.length).toBe(2);
     expect(dash.byModel.length).toBe(3);
+    expect(dash.byAgent.length).toBe(3);
     expect(dash.series.length).toBe(3);
     expect(typeof dash.generatedAt).toBe("string");
   });

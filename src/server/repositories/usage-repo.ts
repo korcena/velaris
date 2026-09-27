@@ -6,11 +6,13 @@
  * Every terminal session writes EXACTLY ONE `usage_records` row, then mirrors
  * the same cost/tokens onto `execution_sessions.cost_total`/`tokens_*`. Any
  * aggregate that sums BOTH sources double-counts. Every query here therefore
- * reads FROM `usage_records` ONLY. Joins to `houses`/`tasks` are on their
- * primary keys (1:1), so they can never multiply usage rows. A regression test
- * asserts the partition invariant (`byHouse`/`byModel`/`byTask` each sum to
- * `totals`) and that the session-mirror sum equals — not doubles — the usage
- * total.
+ * reads FROM `usage_records` ONLY. Joins to `houses`/`tasks`/`agents` are on
+ * their primary keys (1:1) and the Phase 6.2 S3 `execution_sessions` join is
+ * `usage_records.session_id = execution_sessions.id` (that `id` is the session
+ * PRIMARY KEY), so none of them can multiply usage rows. A regression test
+ * asserts the partition invariant (`byHouse`/`byModel`/`byTask`/`byAgent` each
+ * sum to `totals`) and that the session-mirror sum equals — not doubles — the
+ * usage total.
  *
  * The estimated-vs-reported split is `SUM(CASE WHEN estimated=1 THEN cost)` vs
  * `estimated=0`; `estimated=1` is always an Ollama local estimate, `0` always a
@@ -32,6 +34,15 @@ export interface UsageFilters {
   provider?: string;
   from?: string;
   to?: string;
+  /**
+   * Phase 6.2 S3: filter to one agent. This clause references
+   * `execution_sessions.agent_id`, so it is ONLY applied by the one query that
+   * joins `execution_sessions` (`getUsageByAgent`, via
+   * `buildWhere(filters, { agentJoin: true })`). The other aggregates
+   * (`totals`/`byHouse`/`byModel`/`byTask`/`series`) deliberately do not join
+   * sessions and ignore this field rather than growing a join on every query.
+   */
+  agentId?: string;
 }
 
 /** SQLite returns numbers for SUM/COUNT; normalize defensively. */
@@ -45,8 +56,18 @@ function num(v: unknown): number {
   return 0;
 }
 
-/** Build the WHERE clause + bound params from the optional filters. */
-function buildWhere(filters: UsageFilters): { sql: string; params: unknown[] } {
+/**
+ * Build the WHERE clause + bound params from the optional filters.
+ *
+ * `opts.agentJoin` is the SINGLE switch that enables the `agentId` clause: it
+ * references `s.agent_id`, which only exists when the caller has joined
+ * `execution_sessions s`. Default false keeps the no-join aggregates unchanged
+ * (they ignore a stray `agentId` — see `UsageFilters.agentId`).
+ */
+function buildWhere(
+  filters: UsageFilters,
+  opts: { agentJoin?: boolean } = {},
+): { sql: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
   if (filters.houseId) {
@@ -72,6 +93,10 @@ function buildWhere(filters: UsageFilters): { sql: string; params: unknown[] } {
   if (filters.to) {
     clauses.push("u.created_at <= ?");
     params.push(filters.to);
+  }
+  if (opts.agentJoin && filters.agentId) {
+    clauses.push("s.agent_id = ?");
+    params.push(filters.agentId);
   }
   return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
@@ -120,14 +145,20 @@ interface RawBreakdown extends RawTotals {
   taskTitle?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  agentId?: string | null;
+  agentName?: string | null;
   estimatedRows?: unknown;
 }
 
-function toBreakdown(row: RawBreakdown, kind: "house" | "model" | "task"): UsageBreakdownDto {
+function toBreakdown(
+  row: RawBreakdown,
+  kind: "house" | "model" | "task" | "agent",
+): UsageBreakdownDto {
   const houseId = row.houseId ?? null;
   const taskId = row.taskId ?? null;
   const provider = row.provider ?? null;
   const modelId = row.modelId ?? null;
+  const agentId = row.agentId ?? null;
 
   let key: string;
   let label: string;
@@ -137,6 +168,11 @@ function toBreakdown(row: RawBreakdown, kind: "house" | "model" | "task"): Usage
   } else if (kind === "model") {
     key = `${provider ?? "unknown"}/${modelId ?? "unknown"}`;
     label = modelId || "(no model)";
+  } else if (kind === "agent") {
+    // Null session attribution (history + zero-agent houses) is honest and
+    // grouped under one bucket rather than guessed (Q6: no backfill).
+    key = agentId ?? "__unassigned__";
+    label = row.agentName ?? (agentId ? agentId : "House default / unassigned");
   } else {
     key = taskId ?? "__unassigned__";
     label = row.taskTitle ?? taskId ?? "Unassigned task";
@@ -149,6 +185,7 @@ function toBreakdown(row: RawBreakdown, kind: "house" | "model" | "task"): Usage
     taskId,
     provider,
     modelId,
+    agentId,
     totalCost: num(row.totalCost),
     estimatedCost: num(row.estimatedCost),
     reportedCost: num(row.reportedCost),
@@ -230,6 +267,35 @@ export function getUsageByTask(
     )
     .all(...params, limit) as RawBreakdown[];
   return rows.map((r) => toBreakdown(r, "task"));
+}
+
+/**
+ * Totals grouped by the session's routed agent (Phase 6.2 S3, Q6).
+ *
+ * Double-count guarantee: joins `usage_records.session_id` to
+ * `execution_sessions.id` — the session PRIMARY KEY — so the join is strictly
+ * 1:1 (every `usage_records` row references exactly one session) and can never
+ * multiply usage rows. `agents` is joined on its PK for the display name. Rows
+ * whose session `agent_id` is NULL (historical runs + houses with zero agents)
+ * group under key `__unassigned__`; they are NOT backfilled (Q6).
+ */
+export function getUsageByAgent(
+  db: VelarisDb,
+  filters: UsageFilters = {},
+): UsageBreakdownDto[] {
+  const { sql, params } = buildWhere(filters, { agentJoin: true });
+  const rows = rawDb(db)
+    .prepare(
+      `SELECT s.agent_id AS agentId, a.name AS agentName, ${AGG_COLUMNS}
+         FROM usage_records u
+         JOIN execution_sessions s ON s.id = u.session_id
+         LEFT JOIN agents a ON a.id = s.agent_id
+         ${sql}
+        GROUP BY s.agent_id
+        ORDER BY totalCost DESC, agentId ASC`,
+    )
+    .all(...params) as RawBreakdown[];
+  return rows.map((r) => toBreakdown(r, "agent"));
 }
 
 /**

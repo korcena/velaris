@@ -594,18 +594,21 @@ export interface UsageTotalsDto {
 }
 
 /**
- * One grouped row in a usage breakdown (per house / per model / per task).
- * Carries the estimated/reported split so a stacked bar can render it.
+ * One grouped row in a usage breakdown (per house / per model / per task /
+ * per agent). Carries the estimated/reported split so a stacked bar can render
+ * it.
  */
 export interface UsageBreakdownDto {
-  /** Stable group key: houseId | `${provider}/${modelId}` | taskId. */
+  /** Stable group key: houseId | `${provider}/${modelId}` | taskId | agentId. */
   key: string;
-  /** Human label: house name | provider/modelId | task title. */
+  /** Human label: house name | provider/modelId | task title | agent name. */
   label: string;
   houseId: Id | null;
   taskId: Id | null;
   provider: string | null;
   modelId: string | null;
+  /** Phase 6.2 S3: the session's routed agent; null for unassigned history. */
+  agentId: Id | null;
   totalCost: number;
   estimatedCost: number;
   reportedCost: number;
@@ -636,6 +639,8 @@ export interface UsageDashboardDto {
   byModel: UsageBreakdownDto[];
   /** Top tasks by cost (bounded) — the per-task breakdown. */
   byTask: UsageBreakdownDto[];
+  /** Phase 6.2 S3: cost grouped by the session's routed agent (Q6). */
+  byAgent: UsageBreakdownDto[];
   /** Cost/token series ordered oldest→newest for the sparkline. */
   series: UsageSeriesPointDto[];
   bucket: "day" | "hour";

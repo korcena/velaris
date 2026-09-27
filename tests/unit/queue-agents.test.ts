@@ -4,9 +4,10 @@
  * Proves:
  *  - a task with a non-null `agentId` routes to THAT agent's configuration
  *    (provider kind / model / prompt / allowlist);
- *  - a task with `agentId = null` is BYTE-IDENTICAL to the pre-multi-agent
- *    single-agent path (same house config, same call shape) — the regression
- *    that protects the Phase 4/5 suites.
+ *  - a task with `agentId = null` resolves the house DEFAULT agent for the run
+ *    config (unchanged) AND now passes its id as `agentId` so the session is
+ *    attributed (Phase 6.2 S3 / Q6 behavioural change — see the named test);
+ *  - a house with ZERO agents keeps the old null-agent / house-config path.
  *
  * The runner is mocked so no real engine/OpenCode/Ollama work happens.
  */
@@ -17,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { createHouse, createAgent, listAgentsForHouse } from "@/server/repositories/house-repo";
+import { createHouse, createAgent, listAgentsForHouse, resolveRuntimeAgent } from "@/server/repositories/house-repo";
 import { createTask } from "@/server/repositories/task-repo";
 import type { AgentExecutionProvider } from "@/server/execution/types";
 import { OpencodeClient } from "@/server/opencode";
@@ -167,7 +168,7 @@ describe("queue per-agent routing", () => {
     expect(ctx.agentId).toBe(ocAgent.id);
   });
 
-  it("REGRESSION: agentId=null is byte-identical to the single-agent path", async () => {
+  it("BEHAVIOURAL CHANGE (Q6/S3): agentId=null now resolves the default agent for attribution", async () => {
     const db = getDb();
     const house = createHouse(db, {
       name: "H",
@@ -194,13 +195,33 @@ describe("queue per-agent routing", () => {
 
     expect(executeTask).toHaveBeenCalledTimes(1);
     const ctx = (executeTask as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    // Without a task agent the run context carries agent=null / agentId=null and
-    // the house's own model — exactly the pre-Phase-6 shape.
-    expect(ctx.agent).toBeNull();
-    expect(ctx.agentId).toBeNull();
+    // Phase 6.2 S3 (Q6) changed this from agent=null / agentId=null: a default
+    // run now resolves the house's default (oldest) agent so the new session's
+    // agent_id is populated for per-agent cost attribution. The run's MODEL is
+    // unchanged (the default agent's configuration IS the house configuration).
+    const defaultAgent = listAgentsForHouse(db, house.id)[0];
+    expect(ctx.agent?.id).toBe(defaultAgent.id);
+    expect(ctx.agentId).toBe(defaultAgent.id);
     expect(ctx.modelId).toBe("house-model");
     // And the routed house DTO default agent is the single agent.
     expect(listAgentsForHouse(db, house.id)).toHaveLength(1);
+  });
+
+  it("a house with ZERO agents leaves the run unattributed (resolveRuntimeAgent null)", async () => {
+    const db = getDb();
+    const house = createHouse(db, {
+      name: "Empty",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeConfig("opencode"),
+    });
+    // Remove the only agent so the house has none (defensive edge).
+    getRawDb().prepare("DELETE FROM agents WHERE house_id = ?").run(house.id);
+
+    // Queue line 225: `resolveRuntimeAgent` returns null → runtimeAgentId null and
+    // runtimeConfig falls back to house.configuration — identical to the old path.
+    const task = createTask(db, { title: "T", houseId: house.id, workingDirectory: tmpDir });
+    expect(resolveRuntimeAgent(db, house.id, task)).toBeNull();
   });
 
   it("REGRESSION: a single-agent house with a null agentId still uses the house allowlist", async () => {

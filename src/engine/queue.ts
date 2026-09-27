@@ -211,10 +211,18 @@ export class TaskQueue {
       // to failed/queued itself when it cannot run.
       //
       // Phase 6 Stage B: an explicitly targeted agent (task.agentId) drives the
-      // run's configuration; when null the house configuration is used exactly
-      // as before (byte-identical single-agent path). The default agent's config
-      // IS the house configuration, so both agree for single-agent houses.
-      const runtimeAgent = task.agentId ? resolveRuntimeAgent(db, house.id, task) : null;
+      // run's configuration; when null the house default (oldest agent) does.
+      //
+      // Phase 6.2 S3 (Q6): ALWAYS resolve the runtime agent — including default
+      // runs — so `execution_sessions.agent_id` is populated for future runs and
+      // per-agent cost rollups can attribute them. This does NOT change the run
+      // config: `houseRowToDto` already sets `house.configuration` to the default
+      // agent's configuration, so for a house WITH agents the resolved config is
+      // the same object's values; for a house with ZERO agents
+      // `resolveRuntimeAgent` still returns null → `runtimeConfig` stays
+      // `house.configuration` and `runtimeAgentId` stays null (identical to
+      // before). Historical nulls are intentionally NOT backfilled (Q6).
+      const runtimeAgent = resolveRuntimeAgent(db, house.id, task);
       const runtimeConfig = runtimeAgent?.configuration ?? house.configuration;
       const runtimeAgentId = runtimeAgent?.id ?? null;
       const provider: ProviderKind = runtimeConfig.executionProvider;

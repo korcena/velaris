@@ -52,11 +52,18 @@ function seedUsage(opts: {
   cost: number;
   estimated: boolean;
   createdAt: string;
+  /** Phase 6.2 S3: routed agent for the session (null = unassigned). */
+  agentId?: string | null;
 }): void {
   const raw = getRawDb();
   raw
     .prepare("INSERT OR IGNORE INTO houses (id,name,description,kind,status) VALUES (?,?,'','agent','active')")
     .run(opts.houseId, opts.houseName);
+  if (opts.agentId) {
+    raw
+      .prepare("INSERT OR IGNORE INTO agents (id,house_id,name,role) VALUES (?,?,?, 'R')")
+      .run(opts.agentId, opts.houseId, `Agent ${opts.agentId}`);
+  }
   raw
     .prepare(
       `INSERT INTO tasks (id, title, description, type, status, house_id, created_at, updated_at)
@@ -66,10 +73,10 @@ function seedUsage(opts: {
   raw
     .prepare(
       `INSERT INTO execution_sessions
-         (id, task_id, house_id, status, provider, model_id, cost_total, input_tokens, output_tokens, created_at, updated_at)
-       VALUES (?, ?, ?, 'completed', ?, ?, ?, 100, 50, ?, ?)`,
+         (id, task_id, house_id, agent_id, status, provider, model_id, cost_total, input_tokens, output_tokens, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, 100, 50, ?, ?)`,
     )
-    .run(`${opts.id}-s`, `${opts.id}-t`, opts.houseId, opts.provider, opts.modelId, opts.cost, opts.createdAt, opts.createdAt);
+    .run(`${opts.id}-s`, `${opts.id}-t`, opts.houseId, opts.agentId ?? null, opts.provider, opts.modelId, opts.cost, opts.createdAt, opts.createdAt);
   raw
     .prepare(
       `INSERT INTO usage_records
@@ -81,13 +88,16 @@ function seedUsage(opts: {
 
 const REPORTED = 0.0123 + 0.0007 + 1.5; // 1.513
 const ESTIMATED = 0.25;
+const AGENT_A = 0.0123 + 0.0007; // g1 + g2 attributed to ua-g1
+const AGENT_B = 1.5; // g3 attributed to ua-g2
+const UNASSIGNED = ESTIMATED; // g4 has no agent
 
 function seedGolden(): void {
   bootstrapDb();
-  seedUsage({ id: "g1", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 0.0123, estimated: false, createdAt: "2026-01-01T10:00:00.000Z" });
-  seedUsage({ id: "g2", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 0.0007, estimated: false, createdAt: "2026-01-01T11:00:00.000Z" });
-  seedUsage({ id: "g3", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 1.5, estimated: false, createdAt: "2026-01-02T10:00:00.000Z" });
-  seedUsage({ id: "g4", houseId: "u-house", houseName: "Usage House", provider: "ollama", modelId: "llama3.1:8b", cost: ESTIMATED, estimated: true, createdAt: "2026-01-02T12:00:00.000Z" });
+  seedUsage({ id: "g1", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 0.0123, estimated: false, createdAt: "2026-01-01T10:00:00.000Z", agentId: "ua-g1" });
+  seedUsage({ id: "g2", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 0.0007, estimated: false, createdAt: "2026-01-01T11:00:00.000Z", agentId: "ua-g1" });
+  seedUsage({ id: "g3", houseId: "u-house", houseName: "Usage House", provider: "opencode", modelId: "glm-5.3", cost: 1.5, estimated: false, createdAt: "2026-01-02T10:00:00.000Z", agentId: "ua-g2" });
+  seedUsage({ id: "g4", houseId: "u-house", houseName: "Usage House", provider: "ollama", modelId: "llama3.1:8b", cost: ESTIMATED, estimated: true, createdAt: "2026-01-02T12:00:00.000Z", agentId: null });
 }
 
 describe("GET /api/usage", () => {
@@ -100,6 +110,7 @@ describe("GET /api/usage", () => {
       byHouse: Array<{ houseId: string; label: string }>;
       byModel: Array<{ modelId: string }>;
       byTask: Array<{ taskId: string }>;
+      byAgent: Array<{ key: string; label: string; agentId: string | null; totalCost: number }>;
       series: Array<{ bucket: string }>;
       bucket: string;
       generatedAt: string;
@@ -123,7 +134,30 @@ describe("GET /api/usage", () => {
     expect(body.byHouse[0].label).toBe("Usage House");
     expect(body.byModel.length).toBe(2);
     expect(body.byTask.length).toBe(4);
+    expect(body.byAgent).toHaveLength(3);
+    const agentSum = body.byAgent.reduce((a, r) => a + r.totalCost, 0);
+    expect(agentSum).toBeCloseTo(body.totals.totalCost, 9);
+    const unassigned = body.byAgent.find((r) => r.key === "__unassigned__")!;
+    expect(unassigned.label).toBe("House default / unassigned");
+    expect(unassigned.totalCost).toBeCloseTo(UNASSIGNED, 9);
     expect(body.series.map((p) => p.bucket)).toEqual(["2026-01-01", "2026-01-02"]);
+  });
+
+  it("filters the byAgent breakdown by agentId", async () => {
+    seedGolden();
+    const res = await getUsage(req(`${BASE}/api/usage?agentId=ua-g1`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      byAgent: Array<{ agentId: string | null; totalCost: number }>;
+    };
+    expect(body.byAgent).toHaveLength(1);
+    expect(body.byAgent[0].agentId).toBe("ua-g1");
+    expect(body.byAgent[0].totalCost).toBeCloseTo(AGENT_A, 9);
+
+    const onlyB = await getUsage(req(`${BASE}/api/usage?agentId=ua-g2`));
+    const onlyBBody = (await onlyB.json()) as { byAgent: Array<{ totalCost: number }> };
+    expect(onlyBBody.byAgent).toHaveLength(1);
+    expect(onlyBBody.byAgent[0].totalCost).toBeCloseTo(AGENT_B, 9);
   });
 
   it("honours houseId / provider / bucket / taskLimit filters", async () => {
@@ -160,5 +194,14 @@ describe("GET /api/usage", () => {
   it("rejects an invalid bucket / taskLimit with 400", async () => {
     await getUsage(req(`${BASE}/api/usage?bucket=week`)).then((r) => expect(r.status).toBe(400));
     await getUsage(req(`${BASE}/api/usage?taskLimit=0`)).then((r) => expect(r.status).toBe(400));
+  });
+
+  it("rejects a bad/oversized agentId with 400", async () => {
+    // Empty (whitespace) value fails min(1) after trim.
+    await getUsage(req(`${BASE}/api/usage?agentId=%20`)).then((r) => expect(r.status).toBe(400));
+    // Over the 200-char cap.
+    await getUsage(req(`${BASE}/api/usage?agentId=${"a".repeat(201)}`)).then((r) =>
+      expect(r.status).toBe(400),
+    );
   });
 });
