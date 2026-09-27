@@ -18,14 +18,19 @@ import { runOllamaTask } from "@/server/execution/ollama/runtime";
 import { OpencodeClient } from "@/server/opencode";
 import { OllamaClient } from "@/server/execution/ollama/client";
 import type { HouseConfiguration, HouseDto, TaskDto } from "@/shared/types";
-import { getHouse, resolveRuntimeAgent } from "@/server/repositories/house-repo";
+import { getHouse, listHouses, resolveRuntimeAgent } from "@/server/repositories/house-repo";
 import { getTask } from "@/server/repositories/task-repo";
 import {
   listQueuedTaskIds,
   claimQueuedTask,
   setTaskStatus,
+  setTaskHouse,
 } from "@/server/repositories/task-repo";
-import { createExecutionEvent, getActiveSessionForHouse } from "@/server/repositories/execution-repo";
+import {
+  createExecutionEvent,
+  createNotification,
+  getActiveSessionForHouse,
+} from "@/server/repositories/execution-repo";
 import { resolveSafePath, isPathAllowed, worktreeRoot } from "@/lib/paths";
 import {
   effectiveWorkspaceAllowlist,
@@ -33,6 +38,10 @@ import {
   WORKSPACE_UNREGISTERED_MESSAGE,
 } from "@/server/repositories/workspace";
 import { getWorktreeIsolationEnabled } from "@/server/repositories/provider-config-repo";
+import {
+  chooseQuestHouse,
+  type RoutingReason,
+} from "@/server/execution/planning/route-quest";
 import { cleanupWorktree, resolveWorktree, type ResolvedWorktree } from "./worktree";
 import { runParent, tickActivePlans } from "./orchestrator";
 import type { OrchestratorDeps } from "./orchestrator";
@@ -48,6 +57,19 @@ export interface QueueDeps {
   /** Signal aborted on engine shutdown — stops the queue + aborts in-flight. */
   signal?: AbortSignal;
   log: (msg: string) => void;
+}
+
+/**
+ * Actionable message for a terminal routing failure (`houseId === null`).
+ * The `no_directory` case has no directory at all, so it must NOT reuse the
+ * workspace "register this directory" message.
+ */
+function routingFailureMessage(reason: RoutingReason): string {
+  if (reason === "no_directory") {
+    return "This quest has no working directory and no project directory — set one before the court can plan it.";
+  }
+  // "no_high_lord" (and any other terminal reason) — no eligible destination.
+  return "No house can run this quest: create an active house or restore the High Lord.";
 }
 
 export class TaskQueue {
@@ -102,12 +124,21 @@ export class TaskQueue {
       if (this.stopping) break;
       if (this.inFlight.has(taskId)) continue;
 
-      // 2. Per-task provider health gate BEFORE claim: leave the task queued and
+      // 2. Pre-claim routing: a house-less quest is resolved ONCE per tick,
+      //    before the provider health gate and the atomic claim. Explicitly
+      //    assigned quests are untouched. A re-homed quest then waits under the
+      //    normal health gate below.
+      let task = getTask(db, taskId);
+      if (task && !task.houseId) {
+        this.resolveUnassignedTask(task);
+        task = getTask(db, taskId); // re-read: routing wrote house_id (or failed the task)
+      }
+
+      // 3. Per-task provider health gate BEFORE claim: leave the task queued and
       //    retry next tick when the task's own provider is unhealthy. This
       //    preserves the previous global OpenCode health-gate behaviour for
       //    OpenCode tasks while letting Ollama tasks through when only OpenCode
       //    is down.
-      const task = getTask(db, taskId);
       if (task && task.houseId) {
         const house = getHouse(db, task.houseId);
         if (house) {
@@ -155,6 +186,90 @@ export class TaskQueue {
     }
   }
 
+  /**
+   * Resolve a house-less quest before it is claimed: score the active agent
+   * roster (with workspace-viability filtering) and either assign the winning
+   * house, re-home the quest onto the High Lord, or terminally fail it with an
+   * actionable message. Explicitly assigned quests never reach this method.
+   *
+   * Idempotent: under an unchanged roster the same decision is re-derived, but
+   * this only runs while `house_id IS NULL`; once it writes a house (or fails
+   * the task), subsequent ticks skip it.
+   */
+  private resolveUnassignedTask(task: TaskDto): void {
+    const { db } = this.deps;
+    const houses = listHouses(db, { includeHighLord: true });
+
+    const effectiveAllowlists = new Map<string, string[]>();
+    for (const h of houses) {
+      effectiveAllowlists.set(h.id, effectiveWorkspaceAllowlist(db, h.configuration));
+    }
+
+    const decision = chooseQuestHouse(
+      {
+        title: task.title,
+        type: task.type,
+        description: task.description,
+        workingDirectory: task.workingDirectory,
+        projectDirectory: projectDirectoryForTask(db, task),
+      },
+      houses,
+      effectiveAllowlists,
+    );
+
+    if (decision.houseId != null) {
+      // Routed to an agent house, or escalated to the High Lord.
+      setTaskHouse(db, task.id, decision.houseId);
+      createExecutionEvent(db, {
+        taskId: task.id,
+        houseId: decision.houseId,
+        rawType: "message",
+        type: "message",
+        payload: {
+          routing: {
+            houseId: decision.houseId,
+            escalated: decision.escalated,
+            reason: decision.reason,
+            score: decision.score,
+          },
+        },
+      });
+      this.deps.log(
+        decision.escalated
+          ? `[queue] task ${task.id}: no meaningful match — escalated to the High Lord (${decision.reason})`
+          : `[queue] task ${task.id}: routed to house ${decision.houseId} (score ${decision.score})`,
+      );
+      return;
+    }
+
+    // Terminal: no house can run this quest.
+    const msg = routingFailureMessage(decision.reason);
+    this.deps.log(`[queue] task ${task.id}: ${msg} (${decision.reason})`);
+    setTaskStatus(db, task.id, "failed", msg);
+    createExecutionEvent(db, {
+      taskId: task.id,
+      houseId: null,
+      rawType: "task_failed",
+      type: "task_failed",
+      payload: {
+        error: msg,
+        routing: {
+          houseId: null,
+          escalated: decision.escalated,
+          reason: decision.reason,
+          score: decision.score,
+        },
+      },
+    });
+    createNotification(db, {
+      type: "failure",
+      houseId: null,
+      taskId: task.id,
+      title: `Quest routing failed: ${task.title}`,
+      body: msg,
+    });
+  }
+
   /** Execute an already-claimed task. */
   private async runClaimedTask(taskId: string): Promise<void> {
     const { db, raw, adapter, client, signal } = this.deps;
@@ -164,11 +279,14 @@ export class TaskQueue {
       return;
     }
     
-    // Ensure the task has a house & the house is active.
+    // Defensive fallback: pre-claim routing already resolves every house-less
+    // quest, so this branch should be unreachable. Keep it as a guard with an
+    // actionable message rather than re-introducing routing logic here.
     if (!task.houseId) {
-      this.deps.log(`[queue] task ${taskId} has no assigned house — marking failed`);
-      setTaskStatus(db, taskId, "failed", "No house assigned");
-      createExecutionEvent(db, { taskId, houseId: null, rawType: "task_failed", type: "task_failed", payload: { error: "No house assigned" } });
+      const msg = "Unassigned quest reached execution — routing did not assign a house";
+      this.deps.log(`[queue] task ${taskId}: ${msg}`);
+      setTaskStatus(db, taskId, "failed", msg);
+      createExecutionEvent(db, { taskId, houseId: null, rawType: "task_failed", type: "task_failed", payload: { error: msg } });
       return;
     }
     const house = getHouse(db, task.houseId);

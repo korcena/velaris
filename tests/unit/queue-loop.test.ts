@@ -25,7 +25,7 @@ import {
   listQueuedTaskIds,
 } from "@/server/repositories/task-repo";
 import { createProject } from "@/server/repositories/project-repo";
-import { listEventsForTask } from "@/server/repositories/execution-repo";
+import { listEventsForTask, listNotifications } from "@/server/repositories/execution-repo";
 import { WORKSPACE_UNREGISTERED_MESSAGE } from "@/server/repositories/workspace";
 import type { AgentExecutionProvider } from "@/server/execution/types";
 import type { HouseConfiguration } from "@/shared/types";
@@ -120,7 +120,7 @@ describe("TaskQueue", () => {
     expect(now?.status).toBe("running"); // claimed by the queue (runner mock leaves it running)
   });
 
-  it("task with no house is claimed exactly once → failed, runner NOT called", async () => {
+  it("house-less task with no houses fails cleanly with the actionable message, runner NOT called", async () => {
     const task = createTask(getDb(), {
       title: "T",
       houseId: null,
@@ -131,8 +131,84 @@ describe("TaskQueue", () => {
     const queue = makeQueue(fakeClient(true), adapter);
     await runOnePass(queue);
 
-    // Regression: the task must not be left stuck "running" with no claim.
+    // No agent houses and no High Lord → terminal no_high_lord failure.
     expect(getTask(getDb(), task.id)?.status).toBe("failed");
+    const failure = listEventsForTask(getDb(), task.id).find((e) => e.type === "task_failed");
+    expect(failure?.payload.error).toBe(
+      "No house can run this quest: create an active house or restore the High Lord.",
+    );
+    // A terminal routing failure also raises a `failure` notification.
+    const notification = listNotifications(getDb()).find((n) => n.taskId === task.id);
+    expect(notification?.type).toBe("failure");
+    expect(notification?.body).toBe(
+      "No house can run this quest: create an active house or restore the High Lord.",
+    );
+    expect(executeTask).not.toHaveBeenCalled();
+  });
+
+  it("house-less task with a meaningful house match routes to it and runs", async () => {
+    const house = createHouse(getDb(), {
+      name: "Research Hall",
+      description: "research analysis",
+      agent: { name: "Scholar", role: "Researcher" },
+      configuration: makeHouseConfig([tmpDir]),
+    });
+    const task = createTask(getDb(), {
+      title: "Research analysis quest",
+      description: "research analysis",
+      houseId: null,
+      workingDirectory: tmpDir,
+    });
+
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    const after = getTask(getDb(), task.id)!;
+    expect(after.houseId).toBe(house.id);
+    expect(after.status).toBe("running");
+    expect(executeTask).toHaveBeenCalled();
+    // Routing provenance is emitted on a reused `message` event.
+    const routing = listEventsForTask(getDb(), task.id).find((e) => e.type === "message");
+    expect((routing?.payload.routing as { houseId: string }).houseId).toBe(house.id);
+  });
+
+  it("default Board flow: matched empty-allowlist house with no dir/project is NOT routed — escalates to no_high_lord failure", async () => {
+    // A registered project makes the empty-allowlist house's EFFECTIVE allowlist
+    // non-empty (the exact bug condition). The task has neither a working
+    // directory nor a project, so `resolveWorkspace` would fail at claim.
+    createProject(getDb(), {
+      name: "Some Other Project",
+      directory: tmpDir,
+      gitInfo: { branch: null, remote: null, dirty: false },
+    });
+    createHouse(getDb(), {
+      name: "Research Hall",
+      description: "research analysis",
+      agent: { name: "Scholar", role: "Researcher" },
+      configuration: makeHouseConfig([]),
+    });
+    const task = createTask(getDb(), {
+      title: "Research analysis quest",
+      description: "research analysis",
+      houseId: null,
+      workingDirectory: null,
+    });
+
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    // No viable house and no High Lord → terminal, not a route-then-fail.
+    const after = getTask(getDb(), task.id)!;
+    expect(after.houseId).toBeNull();
+    expect(after.status).toBe("failed");
+    const failure = listEventsForTask(getDb(), task.id).find((e) => e.type === "task_failed");
+    expect(failure?.payload.error).toBe(
+      "No house can run this quest: create an active house or restore the High Lord.",
+    );
+    // Never even emitted a routing `message` event.
+    expect(listEventsForTask(getDb(), task.id).some((e) => e.type === "message")).toBe(false);
     expect(executeTask).not.toHaveBeenCalled();
   });
 

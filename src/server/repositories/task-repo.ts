@@ -206,6 +206,21 @@ export function setTaskStatus(
 }
 
 /**
+ * Set a task's house directly (engine-owned routing write). Explicit-assignment
+ * paths always set house_id at creation; this is only used by the engine's
+ * pre-claim routing of a house-less quest.
+ */
+export function setTaskHouse(db: VelarisDb, taskId: string, houseId: string): TaskDto | null {
+  const existing = db.select().from(tasks).where(eq(tasks.id, taskId)).get();
+  if (!existing) return null;
+  db.update(tasks)
+    .set({ houseId, updatedAt: new Date().toISOString() })
+    .where(eq(tasks.id, taskId))
+    .run();
+  return getTask(db, taskId);
+}
+
+/**
  * Record/overwrite the High Lord `execution_preferences.plan` block with an
  * abort reason (addendum D4c). Shared by the ENGINE's abortPlan and the WEB's
  * cancel route so the burn-house UI (`plan-board.tsx` / map) sees `abortReason`

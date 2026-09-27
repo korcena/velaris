@@ -246,6 +246,15 @@ export const ORCHESTRATION_DEFAULTS = {
   PLAN_TOKEN_BUDGET: 400_000,
 } as const;
 
+/**
+ * Quest auto-assignment thresholds (house-less quests only). A single weak word
+ * overlap is NOT enough — ambiguous quests escalate to the High Lord.
+ */
+export const QUEST_ROUTING_DEFAULTS = {
+  MIN_ROUTE_SCORE: 2,
+  MIN_SCORE_MARGIN: 1,
+} as const;
+
 /** Seeded High Lord house identity (used by web+engine boot seeds). */
 export const HIGH_LORD_SEED = {
   HOUSE_NAME: "High Lord",
