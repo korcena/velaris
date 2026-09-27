@@ -24,6 +24,14 @@ export const AUDIT_LOG_DEFAULT_LIMIT = 25;
 /** Hard cap on a single page — keeps the read bounded regardless of input. */
 export const AUDIT_LOG_MAX_LIMIT = 100;
 
+/**
+ * Export row cap. An export is unbounded in intent (all matching rows) but must
+ * never be unbounded in practice, so the schema hard-caps it at 10 000 rows.
+ * The route likewise defaults to this cap when `limit` is omitted.
+ */
+export const AUDIT_EXPORT_MAX_LIMIT = 10_000;
+export const AUDIT_EXPORT_DEFAULT_LIMIT = AUDIT_EXPORT_MAX_LIMIT;
+
 /** GET /api/audit-log query — all filters optional; defaults apply server-side. */
 export const auditLogQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(AUDIT_LOG_MAX_LIMIT).optional(),
@@ -35,6 +43,27 @@ export const auditLogQuerySchema = z.object({
 });
 
 export type AuditLogQueryInput = z.infer<typeof auditLogQuerySchema>;
+
+/**
+ * GET /api/audit-log/export query — the list filters plus a format selector and
+ * `from`/`to` ISO date bounds (compared lexically against the ISO `created_at`
+ * text column), with a hard row cap so an export can never be unbounded.
+ * `format` defaults to `csv` and rejects anything else with a 400.
+ */
+export const auditExportQuerySchema = z.object({
+  format: z.enum(["csv", "json"]).default("csv"),
+  limit: z.coerce.number().int().min(1).max(AUDIT_EXPORT_MAX_LIMIT).optional(),
+  actor: z.enum(AUDIT_ACTOR_TUPLE).optional(),
+  entityType: z.enum(AUDIT_ENTITY_TYPE_TUPLE).optional(),
+  entityId: z.string().trim().min(1).max(200).optional(),
+  action: z.string().trim().min(1).max(120).optional(),
+  /** ISO lower bound (created_at > from). */
+  from: z.string().trim().min(1).max(40).optional(),
+  /** ISO upper bound (created_at <= to). */
+  to: z.string().trim().min(1).max(40).optional(),
+});
+
+export type AuditExportQueryInput = z.infer<typeof auditExportQuerySchema>;
 
 // Compile-time parity guard: the schema tuples must match the shared constants.
 void (AUDIT_ACTORS satisfies readonly (typeof AUDIT_ACTOR_TUPLE)[number][]);

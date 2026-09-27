@@ -17,8 +17,15 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { recordAudit, listAuditLog } from "@/server/repositories/audit-repo";
+import {
+  recordAudit,
+  listAuditLog,
+  pruneAuditLog,
+  toAuditCsv,
+  AUDIT_CSV_HEADER,
+} from "@/server/repositories/audit-repo";
 import { AUDIT_ACTORS } from "@/shared/constants";
+import type { AuditLogDto } from "@/shared/types";
 
 let tmpDir: string;
 
@@ -113,6 +120,20 @@ describe("recordAudit / listAuditLog", () => {
     expect(after.map((e) => e.id)).toEqual(["new"]);
   });
 
+  it("filters by `to` timestamp (inclusive upper bound)", () => {
+    const db = getDb();
+    recordAudit(db, { id: "old", action: "create", entityType: "house", entityId: "h1" });
+    recordAudit(db, { id: "new", action: "update", entityType: "house", entityId: "h1" });
+    const raw = getRawDb();
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run("2026-01-01T00:00:00.000Z", "old");
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run("2026-01-05T00:00:00.000Z", "new");
+
+    const upTo = listAuditLog(db, { to: "2026-01-03T00:00:00.000Z" });
+    expect(upTo.map((e) => e.id)).toEqual(["old"]);
+    // Boundary is inclusive.
+    expect(listAuditLog(db, { to: "2026-01-05T00:00:00.000Z" }).map((e) => e.id)).toEqual(["new", "old"]);
+  });
+
   it("tolerates malformed metadata JSON (falls back to {})", () => {
     const db = getDb();
     recordAudit(db, { id: "bad", action: "create", entityType: "house", entityId: "h1" });
@@ -178,3 +199,96 @@ describe("actor CHECK constraint parity", () => {
     expect(listAuditLog(db)).toHaveLength(0);
   });
 });
+
+describe("pruneAuditLog (Phase 6.2 S4 retention)", () => {
+  it("deletes only rows older than the cutoff and returns the count", () => {
+    const db = getDb();
+    recordAudit(db, { id: "ancient", action: "create", entityType: "house", entityId: "h1" });
+    recordAudit(db, { id: "recent", action: "update", entityType: "house", entityId: "h1" });
+    const raw = getRawDb();
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", "ancient");
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run(new Date().toISOString(), "recent");
+
+    const deleted = pruneAuditLog(raw, 30);
+    expect(deleted).toBe(1);
+    expect(listAuditLog(db).map((e) => e.id)).toEqual(["recent"]);
+  });
+
+  it("is a no-op for retentionDays 0 / negative / non-finite", () => {
+    const db = getDb();
+    const raw = getRawDb();
+    recordAudit(db, { id: "old", action: "create", entityType: "house", entityId: "h1" });
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", "old");
+
+    expect(pruneAuditLog(raw, 0)).toBe(0);
+    expect(pruneAuditLog(raw, -5)).toBe(0);
+    expect(pruneAuditLog(raw, Number.NaN)).toBe(0);
+    expect(pruneAuditLog(raw, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(listAuditLog(db)).toHaveLength(1);
+  });
+
+  it("accepts the Drizzle wrapper and touches only audit_log", () => {
+    const db = getDb();
+    const raw = getRawDb();
+    // A non-audit row that must survive the prune.
+    raw.prepare("INSERT INTO houses (id,name,description,kind,status) VALUES ('keep','Keep','','agent','active')").run();
+    recordAudit(db, { id: "old", action: "create", entityType: "house", entityId: "h1" });
+    raw.prepare("UPDATE audit_log SET created_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", "old");
+
+    expect(pruneAuditLog(db, 7)).toBe(1);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM houses").get()).toEqual({ n: 1 });
+  });
+});
+
+describe("toAuditCsv (RFC-4180 serializer)", () => {
+  function dto(overrides: Partial<AuditLogDto> = {}): AuditLogDto {
+    return {
+      id: "a1",
+      actor: "user",
+      actorAgentId: null,
+      action: "create",
+      entityType: "house",
+      entityId: "h1",
+      metadata: {},
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("emits the documented header order with CRLF row endings", () => {
+    const csv = toAuditCsv([dto()]);
+    const lines = csv.split("\r\n");
+    expect(lines[0]).toBe(AUDIT_CSV_HEADER.join(","));
+    expect(csv.endsWith("\r\n")).toBe(true);
+    // No bare LF anywhere (every row is CRLF-terminated).
+    expect(csv.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+
+  it("quotes + escapes comma, double-quote and newline fields per RFC-4180", () => {
+    // entityId carries a comma, a double-quote and an LF — the serializer must
+    // quote it, double the embedded quote and preserve the newline.
+    const csv = toAuditCsv([dto({ id: "a2", entityId: 'x,"y\nz' })]);
+    const dataLine = csv.split("\r\n")[1];
+    expect(dataLine).toBe('a2,user,,create,house,"x,""y\nz",{},2026-01-01T00:00:00.000Z');
+    // The quote/escape rule fires specifically because of `,`, `"` and LF.
+    expect(csv).toContain('"x,""y\nz"');
+  });
+
+  it("quotes the metadata JSON field whenever it contains a comma", () => {
+    const csv = toAuditCsv([dto({ metadata: { note: "a,b" } })]);
+    const dataLine = csv.split("\r\n")[1];
+    // JSON.stringify({note:"a,b"}) = {"note":"a,b"} → quoted + doubled.
+    expect(dataLine).toContain('"{""note"":""a,b""}"');
+  });
+
+  it("doubles embedded double-quotes in a plain field", () => {
+    const csv = toAuditCsv([dto({ id: 'a"b' })]);
+    expect(csv.split("\r\n")[1].startsWith('"a""b",user,')).toBe(true);
+  });
+
+  it("does not quote fields without reserved characters", () => {
+    const csv = toAuditCsv([dto({ id: "plain", action: "update" })]);
+    expect(csv.split("\r\n")[1]).toContain("plain,user,,update,house,h1,{},");
+  });
+});
+

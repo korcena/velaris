@@ -30,6 +30,7 @@ import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
 import { OpenCodeServerManager } from "./opencode-server";
 import { reconcile } from "./reconcile";
 import { sweepWorktrees } from "./worktree";
+import { createAuditPruner, AUDIT_PRUNE_INTERVAL_MS } from "./audit-maintenance";
 import { TaskQueue } from "./queue";
 
 const HEARTBEAT_INTERVAL_MS = 10_000; // log cadence
@@ -110,6 +111,17 @@ async function main(): Promise<void> {
   //     bounded/resilient and never throws, so it can never prevent engine boot.
   await sweepWorktrees(db, client, log);
 
+  // 5c. Audit-log retention prune (Phase 6.2 Stage S4 — Q4). Engine-only
+  //     periodic maintenance: run once at boot, then at most once per hour.
+  //     Default is "keep forever" (retention 0/absent), so this is a no-op
+  //     unless `extra.audit.retentionDays` is explicitly configured. The
+  //     `maybePrune` guard + try/catch ensure it can never break the tick/boot.
+  const auditPruner = createAuditPruner({ db: raw, log });
+  auditPruner.maybePrune();
+  const auditPruneTimer = setInterval(() => {
+    auditPruner.maybePrune();
+  }, AUDIT_PRUNE_INTERVAL_MS);
+
   // 6. Task queue loop. The queue health-gates execution, so it is safe to start
   //    polling immediately even when the server is still coming up.
   const abortController = new AbortController();
@@ -158,6 +170,7 @@ async function main(): Promise<void> {
 
     clearInterval(logTimer);
     clearInterval(writeTimer);
+    clearInterval(auditPruneTimer);
 
     // c. Close DB.
     try {

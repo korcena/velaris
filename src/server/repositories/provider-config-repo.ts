@@ -213,3 +213,32 @@ export function getWorktreeIsolationEnabled(db: VelarisDb | Database.Database): 
     return false;
   }
 }
+
+/**
+ * AUDIT RETENTION (Phase 6.2 Stage S4 — Q4, default = keep forever).
+ *
+ * Reads `extra.audit.retentionDays` on the DEFAULT OpenCode provider config
+ * (mirrors `getWorktreeIsolationEnabled`, so the web already knows how to write
+ * provider `extra` and the change is audited). Returns the retention in days,
+ * or `0` when absent/invalid/`<= 0` — `0` means "keep forever", so the engine
+ * prune is a no-op.
+ */
+export function getAuditRetentionDays(db: VelarisDb | Database.Database): number {
+  const raw: Database.Database =
+    "$client" in db
+      ? ((db as VelarisDb) as unknown as { $client: Database.Database }).$client
+      : (db as Database.Database);
+  const row = raw
+    .prepare(`SELECT extra FROM provider_configs WHERE type = 'opencode' AND is_default = 1 LIMIT 1`)
+    .get() as { extra: string } | undefined;
+  if (!row) return 0;
+  try {
+    const extra = JSON.parse(row.extra) as Record<string, unknown>;
+    const audit = extra.audit as Record<string, unknown> | undefined;
+    const days = audit?.retentionDays;
+    if (typeof days !== "number" || !Number.isFinite(days) || days <= 0) return 0;
+    return days;
+  } catch {
+    return 0;
+  }
+}

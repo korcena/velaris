@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import { auditLog } from "@/lib/db/schema";
@@ -85,6 +86,8 @@ export interface ListAuditLogOptions {
   action?: string;
   /** ISO lower bound (created_at > from). */
   from?: string;
+  /** ISO upper bound (created_at <= to). */
+  to?: string;
 }
 
 /** List audit entries newest-first with optional filters. */
@@ -95,6 +98,7 @@ export function listAuditLog(db: VelarisDb, opts: ListAuditLogOptions = {}): Aud
   if (opts.entityId !== undefined) conditions.push(eq(auditLog.entityId, opts.entityId));
   if (opts.action !== undefined) conditions.push(eq(auditLog.action, opts.action));
   if (opts.from !== undefined) conditions.push(sql`${auditLog.createdAt} > ${opts.from}`);
+  if (opts.to !== undefined) conditions.push(sql`${auditLog.createdAt} <= ${opts.to}`);
 
   const limit = Math.max(1, opts.limit ?? 25);
   const offset = Math.max(0, opts.offset ?? 0);
@@ -108,4 +112,80 @@ export function listAuditLog(db: VelarisDb, opts: ListAuditLogOptions = {}): Aud
     .offset(offset)
     .all()
     .map(auditRowToDto);
+}
+
+/* ------------------------------ Export ------------------------------ */
+
+/** Column order for the CSV export header + rows (matches AuditLogDto fields). */
+export const AUDIT_CSV_HEADER = [
+  "id",
+  "actor",
+  "actor_agent_id",
+  "action",
+  "entity_type",
+  "entity_id",
+  "metadata",
+  "created_at",
+] as const;
+
+/**
+ * RFC-4180 field encoding: a field is quoted iff it contains a comma, a
+ * double-quote, CR or LF; embedded quotes are doubled inside the quotes.
+ * Everything else is emitted verbatim (no gratuitous quoting).
+ */
+function csvField(value: string | null): string {
+  const v = value ?? "";
+  if (/[",\r\n]/.test(v)) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
+}
+
+/**
+ * Serialize audit entries to RFC-4180 CSV: CRLF row separators, a fixed header
+ * row, and `metadata` re-serialized as a compact JSON string (which is quoted
+ * whenever it contains commas/quotes). Pure — no dependency, unit-testable.
+ */
+export function toAuditCsv(entries: AuditLogDto[]): string {
+  const lines: string[] = [AUDIT_CSV_HEADER.join(",")];
+  for (const e of entries) {
+    lines.push(
+      [
+        csvField(e.id),
+        csvField(e.actor),
+        csvField(e.actorAgentId),
+        csvField(e.action),
+        csvField(e.entityType),
+        csvField(e.entityId),
+        csvField(JSON.stringify(e.metadata ?? {})),
+        csvField(e.createdAt),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
+/* ------------------------------ Retention --------------------------- */
+
+/**
+ * Delete `audit_log` rows older than `retentionDays` and return the deleted
+ * count. Guard: a non-finite, `<= 0`, or absent retention is "keep forever" —
+ * return 0 and delete nothing. Only ever touches `audit_log` (never execution
+ * tables). Accepts either the Drizzle wrapper or the raw better-sqlite3
+ * connection so the engine can call it with the connection it already owns.
+ */
+export function pruneAuditLog(
+  db: VelarisDb | Database.Database,
+  retentionDays: number,
+): number {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const raw: Database.Database =
+    "$client" in db
+      ? ((db as VelarisDb) as unknown as { $client: Database.Database }).$client
+      : (db as Database.Database);
+  const result = raw
+    .prepare("DELETE FROM audit_log WHERE created_at < ?")
+    .run(cutoff);
+  return Number(result.changes ?? 0);
 }
