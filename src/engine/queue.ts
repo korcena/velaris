@@ -108,10 +108,7 @@ export class TaskQueue {
       //    OpenCode tasks while letting Ollama tasks through when only OpenCode
       //    is down.
       const task = getTask(db, taskId);
-      if (!task || !task.houseId) {
-        // Handled by runClaimedTask below; let it claim to surface the failure.
-        if (!claimQueuedTask(raw, taskId)) continue;
-      } else {
+      if (task && task.houseId) {
         const house = getHouse(db, task.houseId);
         if (house) {
           // Phase 6 Stage B: gate on the ROUTED agent's provider. With no
@@ -126,8 +123,8 @@ export class TaskQueue {
         }
       }
 
-      // Atomic claim.
-      if (!claimQueuedTask(raw, taskId)) continue; // already taken
+      // Atomic claim (exactly once).
+      if (!claimQueuedTask(raw, taskId)) continue; // already taken or gone
 
       this.inFlight.add(taskId);
       void this.runClaimedTask(taskId).finally(() => {

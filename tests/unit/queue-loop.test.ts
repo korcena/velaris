@@ -120,6 +120,22 @@ describe("TaskQueue", () => {
     expect(now?.status).toBe("running"); // claimed by the queue (runner mock leaves it running)
   });
 
+  it("task with no house is claimed exactly once → failed, runner NOT called", async () => {
+    const task = createTask(getDb(), {
+      title: "T",
+      houseId: null,
+      workingDirectory: tmpDir,
+    });
+
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    // Regression: the task must not be left stuck "running" with no claim.
+    expect(getTask(getDb(), task.id)?.status).toBe("failed");
+    expect(executeTask).not.toHaveBeenCalled();
+  });
+
   it("does not claim when there are no queued tasks", async () => {
     const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
     const queue = makeQueue(fakeClient(true), adapter);
