@@ -28,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import type { VelarisDb } from "@/lib/db";
 import type { OpencodeClient } from "@/server/opencode";
 import { resolveSafePath, worktreeRoot } from "@/lib/paths";
@@ -42,19 +43,16 @@ import type { TerminalStatus } from "@/server/execution/runner";
 /** Default age guard for the orphan sweep: don't race a just-created worktree. */
 export const WORKTREE_SWEEP_GRACE_MS = 60 * 60 * 1000; // 1 hour
 
-/** Session statuses that are safe to treat as terminal for cleanup purposes. */
-const NON_TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = [
-  "pending",
-  "running",
-  "awaiting_approval",
-  "awaiting_input",
-  "paused",
-];
-
 export interface ResolvedWorktree {
   directory: string;
   branch: string;
 }
+
+/** Hard cap for a worktree name (also the sanitizer's cap). */
+export const WORKTREE_NAME_MAX_LENGTH = 60;
+
+/** Bytes of randomness behind a worktree name's unique suffix (8 hex chars). */
+export const WORKTREE_NAME_SUFFIX_BYTES = 4;
 
 /**
  * Reduce a task id/title to a path-safe worktree name: lowercase alphanumerics
@@ -66,7 +64,30 @@ export function sanitizeWorktreeName(input: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^-+|-+$/g, "");
-  return slug.length > 0 ? slug.slice(0, 60) : "task";
+  return slug.length > 0 ? slug.slice(0, WORKTREE_NAME_MAX_LENGTH) : "task";
+}
+
+/**
+ * Build a worktree name that is UNIQUE per run while staying debuggable: the
+ * path-safe task id/title slug plus a short random hex suffix. The suffix is
+ * what prevents two runs of the SAME task (which reuse the task id) from asking
+ * OpenCode for an existing worktree name — a collision there can make
+ * `createWorktree` silently return/keep the old directory and defeat isolation.
+ *
+ * The base is truncated first so the suffix can never itself be truncated by
+ * the 60-char cap (task ids are 36 chars, so this only bites long titles). The
+ * final value is re-sanitized, so the whole slug stays path-safe.
+ *
+ * `suffix` is injectable for deterministic tests; production callers omit it.
+ */
+export function uniqueWorktreeName(
+  input: string,
+  suffix: string = randomBytes(WORKTREE_NAME_SUFFIX_BYTES).toString("hex"),
+): string {
+  const safeSuffix = sanitizeWorktreeName(suffix).replace(/[^a-z0-9]/g, "");
+  const reserved = 1 + safeSuffix.length; // room for "-<suffix>"
+  const base = sanitizeWorktreeName(input).slice(0, Math.max(0, WORKTREE_NAME_MAX_LENGTH - reserved));
+  return sanitizeWorktreeName(`${base}-${safeSuffix}`);
 }
 
 /**
@@ -83,6 +104,9 @@ export function sanitizeWorktreeName(input: string): string {
  * NEVER reused. A previous run's worktree may be dirty (crash / interrupted /
  * reset failed) or may belong to a different source repo after a task edit;
  * reusing it is cross-session contamination. The boot sweep reclaims leftovers.
+ * Names are therefore UNIQUE PER RUN (task slug + short random suffix): two
+ * runs of the same task must never collide on a worktree name, or OpenCode can
+ * hand back the existing directory and silently defeat isolation.
  *
  * Throws on any failure; the caller (queue) treats isolation as best-effort and
  * falls back to the normal resolved directory.
@@ -98,9 +122,10 @@ export async function resolveWorktree(opts: {
   // (a) The source repo must still validate against the house allowlist ALONE.
   const sourceReal = resolveSafePath(opts.sourceDirectory, opts.houseAllowlist);
 
-  // (b) Always create a fresh worktree named after the (unique) task id, bound
-  //     to the source repo via the query param (M2). Reuse is never done (M1).
-  const name = sanitizeWorktreeName(opts.task.id || opts.task.title);
+  // (b) Always create a fresh worktree named after the (unique) task id plus a
+  //     per-run random suffix, bound to the source repo via the query param (M2).
+  //     Reuse is never done (M1).
+  const name = uniqueWorktreeName(opts.task.id || opts.task.title);
   const info = await opts.client.createWorktree({ directory: sourceReal, name });
   if (!info.directory) {
     throw new Error("OpenCode createWorktree returned no directory");
@@ -218,9 +243,21 @@ export async function cleanupWorktree(opts: {
   }
 }
 
-/** True when `status` is a session status still in flight (must not be swept). */
-export function isNonTerminalSessionStatus(status: SessionStatus): boolean {
-  return NON_TERMINAL_SESSION_STATUSES.includes(status);
+/**
+ * True when a session's worktree must be protected from the boot sweep.
+ *
+ * The sweep protects EVERY session whose status is not `completed`:
+ *   - non-terminal (`pending`/`running`/`awaiting_approval`/`awaiting_input`/
+ *     `paused`) are in flight and must never be touched;
+ *   - `failed`/`aborted`/`interrupted` are terminal but deliberately RETAINED
+ *     for inspection per Q3 — `cleanupWorktree` resets and keeps their mapping,
+ *     so the sweep must not undo that intent after the grace period;
+ *   - `completed` is the ONE swept status: a successful run's worktree is
+ *     deleted on terminal, but if that delete failed the mapping is kept and
+ *     the sweep is the safety net that reclaims it (no permanent leak).
+ */
+export function isSweepProtectedSessionStatus(status: SessionStatus): boolean {
+  return status !== "completed";
 }
 
 /** Read the current branch of a git worktree via the git CLI (no shell). */
@@ -307,10 +344,15 @@ export const WORKTREE_SWEEP_CALL_TIMEOUT_MS = 5_000;
  * For each OpenCode worktree that is:
  *   - under `worktreeRoot()`,
  *   - on an `opencode/*` branch (branch-pollution guard),
- *   - not referenced by any NON-TERMINAL session (compared via realpath so
- *     symlink/trailing-slash differences cannot mask an in-flight worktree), and
+ *   - not referenced by any NON-`completed` session (compared via realpath so
+ *     symlink/trailing-slash differences cannot mask an in-flight worktree),
+ *     and
  *   - older than the grace period (avoid racing a just-created worktree),
  * reset then delete it. Idempotent; every action is logged.
+ *
+ * The referenced set protects non-terminal sessions AND failed/aborted/
+ * interrupted runs retained for inspection (Q3). Only `completed` sessions are
+ * swept: their terminal delete may have failed, leaving the mapping behind.
  */
 export async function sweepWorktrees(
   db: VelarisDb,
@@ -353,12 +395,16 @@ async function runSweep(
   }
   if (worktrees.length === 0) return;
 
-  // Worktrees still owned by an in-flight session must never be touched.
-  // M4: compare realpath'd paths on both sides so a symlink or trailing-slash
-  // difference cannot treat an in-flight worktree as unreferenced.
+  // Worktrees still owned by a protected session must never be touched:
+  // non-terminal runs are in flight, and failed/aborted/interrupted runs are
+  // retained for inspection (Q3). Only `completed` sessions are swept — their
+  // terminal delete may have failed, so the sweep reclaims the leftover (no
+  // permanent leak). M4: compare realpath'd paths on both sides so a symlink or
+  // trailing-slash difference cannot treat a referenced worktree as
+  // unreferenced.
   const referenced = new Set(
     listSessionsWithWorktrees(db)
-      .filter((s) => isNonTerminalSessionStatus(s.status))
+      .filter((s) => isSweepProtectedSessionStatus(s.status))
       .map((s) => s.worktreeDirectory)
       .filter((d): d is string => !!d)
       .map((d) => safeRealpath(d)),

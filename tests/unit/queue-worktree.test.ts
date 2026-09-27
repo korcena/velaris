@@ -39,7 +39,7 @@ vi.mock("@/server/execution/ollama/runtime", () => ({
 import { TaskQueue } from "@/engine/queue";
 import { executeTask } from "@/server/execution/runner";
 import { runOllamaTask } from "@/server/execution/ollama/runtime";
-import { resolveWorktree } from "@/engine/worktree";
+import { resolveWorktree, uniqueWorktreeName } from "@/engine/worktree";
 
 let tmpDir: string;
 let dbPath: string;
@@ -101,7 +101,7 @@ function makeMisboundWorktreeDir(name: string): string {
  */
 function clientForWorktree(
   info: { name: string; branch: string; directory: string } | Error,
-  captured?: { urls: string[]; postUrls: string[] },
+  captured?: { urls: string[]; postUrls: string[]; bodies?: unknown[] },
 ): OpencodeClient {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -114,6 +114,7 @@ function clientForWorktree(
     }
     if (url.includes("/experimental/worktree") && (init?.method ?? "GET") === "POST") {
       captured?.postUrls.push(url);
+      captured?.bodies?.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
       if (info instanceof Error) throw info;
       return new Response(JSON.stringify(info), {
         status: 200,
@@ -484,5 +485,70 @@ describe("resolveWorktree — no reuse of a prior worktree (Q3)", () => {
 
     expect(captured.postUrls).toHaveLength(1);
     expect(resolved).toEqual({ directory: freshDir, branch: "opencode/fresh-direct" });
+  });
+});
+
+describe("resolveWorktree — unique name per run (Q3 collision fix)", () => {
+  it("names two consecutive runs of the SAME task differently (no collision)", async () => {
+    enableWorktreeFlag();
+    const firstDir = makeWorktreeDir("uniq-1");
+    const secondDir = makeWorktreeDir("uniq-2");
+    const house = createHouse(getDb(), {
+      name: "H-uniq",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeConfig(),
+    });
+    const task = createTask(getDb(), { title: "T", houseId: house.id, workingDirectory: tmpDir });
+    const taskDto = getTask(getDb(), task.id)!;
+
+    const first = { urls: [] as string[], postUrls: [] as string[], bodies: [] as unknown[] };
+    const second = { urls: [] as string[], postUrls: [] as string[], bodies: [] as unknown[] };
+
+    await resolveWorktree({
+      client: clientForWorktree(
+        { name: "uniq-1", branch: "opencode/uniq-1", directory: firstDir },
+        first,
+      ),
+      task: taskDto,
+      sourceDirectory: tmpDir,
+      houseAllowlist: [tmpDir],
+    });
+    await resolveWorktree({
+      client: clientForWorktree(
+        { name: "uniq-2", branch: "opencode/uniq-2", directory: secondDir },
+        second,
+      ),
+      task: taskDto,
+      sourceDirectory: tmpDir,
+      houseAllowlist: [tmpDir],
+    });
+
+    const firstName = (first.bodies[0] as { name: string }).name;
+    const secondName = (second.bodies[0] as { name: string }).name;
+    expect(firstName).not.toBe(secondName);
+    // Both still start with the sanitized task id (debuggable per task).
+    expect(firstName.startsWith(taskDto.id)).toBe(true);
+    expect(secondName.startsWith(taskDto.id)).toBe(true);
+  });
+
+  it("keeps names path-safe and within the 60-char cap (long titles)", () => {
+    const taskId = "12345678-1234-1234-1234-123456789012"; // 36 chars
+    const longTitle = "Fix a very long and unwieldy title with punctuation! ".repeat(5);
+    for (const input of [taskId, longTitle, "", "!!!", "UPPER_case/../escape"]) {
+      const name = uniqueWorktreeName(input);
+      expect(name.length).toBeGreaterThan(0);
+      expect(name.length).toBeLessThanOrEqual(60);
+      expect(name).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    }
+    // Same input yields different names (random suffix) but the same base cap.
+    expect(uniqueWorktreeName(taskId, "aaaaaaaa")).not.toBe(
+      uniqueWorktreeName(taskId, "bbbbbbbb"),
+    );
+    // A deterministic suffix keeps the whole slug within the cap even for a
+    // max-length base: base is truncated to leave room for "-<suffix>".
+    const name = uniqueWorktreeName("a".repeat(80), "deadbeef");
+    expect(name.length).toBeLessThanOrEqual(60);
+    expect(name.endsWith("-deadbeef")).toBe(true);
   });
 });

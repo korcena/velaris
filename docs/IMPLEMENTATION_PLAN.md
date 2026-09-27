@@ -453,11 +453,21 @@ a seeded copy of a real dev DB.
 ### Acceptance & Retro (2026-09-25)
 
 > **Phase 6 was SPLIT at planning time (Q12 of the Phase 6 addendum).** **6.1 ships and is
-> gated now** (Stages 0, A–F); **6.2 is deferred** (real worktree isolation, FTS5 archive
-> scale-up, per-agent cost rollups, audit retention/export). Everything below asserts 6.1
-> only. The 6.1/6.2 split, and every other scope question, is recorded in
+> gated now** (Stages 0, A–F); **6.2 shipped 2026-09-28** (real worktree isolation, FTS5
+> archive scale-up, per-agent cost rollups, audit retention/export, `tasks.created_at`
+> indexes — see the 2026-09-28 retro note below). Everything below asserts 6.1 only. The
+> 6.1/6.2 split, and every other scope question, is recorded in
 > `docs/superpowers/plans/2026-09-25-phase6-advanced-platform.md` §18 — that addendum is the
 > source of truth and supersedes this section's own wording where they disagree.
+
+**(Retro 2026-09-28) — Phase 6.2 landed.** The deferred items shipped in
+`docs/superpowers/plans/2026-09-28-phase6.2-advanced-platform.md` (Q1–Q7 accepted defaults):
+real per-run worktree isolation behind the default-OFF `experimental.worktreeIsolation` flag
+(client fixed, `?directory=`-bound, allowlist exception, terminal cleanup + boot sweep); an
+FTS5 `archives_fts` index with `LIKE` as the always-on fallback (migration `0011` indexes
+title/description/artifact, message text stays covered by `LIKE`); per-agent cost rollups
+(`byAgent`, with the queue now populating `session.agent_id` for default runs); audit CSV/JSON
+export + engine retention prune; and the `tasks.created_at` indexes.
 
 **Acceptance checklist (mapped to the three criteria above):**
 
@@ -517,11 +527,15 @@ lesson is codified in the Stage 0 harness: chain test from the Phase 1 head + re
 **Deviations / notable decisions (Q1–Q12 accepted defaults, plan §18):** audit covers **web
 user-action rows only** — engine execution lifecycle stays in `execution_events` and is not
 duplicated (Q9); monitoring is a dashboard panel, not a dedicated `/monitoring` page (Q7);
-charts are hand-rolled with no dependency (Q8); archives use `LIKE` + indexes (Q5). **Deferred
-to 6.2:** per-agent cost rollups, agent-level disable/status, FTS5 archive scale-up, audit
-retention/export, dedicated `/monitoring` page, and **real worktree isolation (Stage G — not
-gated; the `/experimental/worktree` endpoint works live, but Phase 5's client method is wrong,
-the worktree root is outside the allowlist, and cleanup/branch-pollution design is unfinished).**
+charts are hand-rolled with no dependency (Q8). Archives initially used `LIKE` + indexes (Q5);
+**6.2 (shipped 2026-09-28)** adds the FTS5 `archives_fts` index with `LIKE` retained as the
+always-on fallback, per-agent cost rollups, audit retention/export, `tasks.created_at` indexes,
+and **real worktree isolation (Stage G) behind the default-OFF `experimental.worktreeIsolation`
+flag — client fixed, `?directory=`-bound, allowlist exception, cleanup + boot sweep.** Agent-level
+disable/status and a dedicated `/monitoring` page remain out of scope (never planned for 6.2).
+
+**6.2 plan:** `docs/superpowers/plans/2026-09-28-phase6.2-advanced-platform.md` (Q1–Q7 accepted
+defaults; migrations `0008`–`0011`).
 
 **Defects found by independent testing/review and fixed during the phase:**
 
@@ -541,12 +555,14 @@ the worktree root is outside the allowlist, and cleanup/branch-pollution design 
 7. Additionally, the tester self-disclosed a test leak into the real dev DB. It was detected,
    cleaned, and verified — no leak remains and the real DB is logically unchanged.
 
-**Residual / known limitations:** real worktree isolation is **6.2** and unverified live in the
-gated suite (the endpoint does work on this machine — `POST /experimental/worktree` returns
-`{name,branch,directory}` — but the Phase 5 client method is wrong and the worktree root is
-outside the allowlist; a fix + an opt-in `@real` smoke is 6.2). No `tasks.created_at` index yet
-(fine at the acceptance bar; add if archive scans show up). `execution_sessions.agent_id` is
-null for default-agent runs (it only matters for the deferred per-agent rollups).
+**Residual / known limitations:** real worktree isolation **shipped in 6.2 (2026-09-28)** behind
+the default-OFF `experimental.worktreeIsolation` flag; the gated suite exercises the client,
+cleanup, sweep, and flag-OFF guarantee, while the live round-trip stays an opt-in `@real` smoke
+(the endpoint works on this machine — `POST /experimental/worktree` returns
+`{name,branch,directory}`). `tasks.created_at` indexes now exist (migration `0008`).
+`execution_sessions.agent_id` is populated for default-agent runs since 6.2 (the queue resolves
+the runtime agent), so per-agent rollups cover new runs; historical nulls remain grouped as
+unassigned. Historical `agent_id` nulls are deliberately not backfilled.
 
 ---
 

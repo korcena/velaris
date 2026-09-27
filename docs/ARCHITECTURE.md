@@ -363,7 +363,9 @@ with proper status codes (400 validation, 404 missing, 409 conflict, 422 bad tra
   - *Shared one-port server* (chosen default, port 4096): one health probe, one SSE feed
     per directory, sessions per task; simplest lifecycle management.
   - *Per-task spawn*: stronger isolation (crash containment), but port allocation + slow
-    startup per task; revisit if isolation becomes a problem (see `/experimental/worktree`).
+    startup per task; revisit if isolation becomes a problem. Per-run workspace isolation is
+    instead an opt-in, default-OFF use of the server's `/experimental/worktree` endpoint
+    (`experimental.worktreeIsolation`; Phase 6.2).
   Engine probes `GET /api/health`; attaches to a running server (even user-started) before
   spawning; kills only the process it spawned; writes pid to `engine_state`.
 - **No secrets in DB.** Provider configs hold base URLs only; OpenCode auth lives in

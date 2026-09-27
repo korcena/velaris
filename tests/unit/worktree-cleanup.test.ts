@@ -8,6 +8,9 @@
  *
  * Boot sweep:
  *   - deletes only unreferenced `opencode/*` worktrees under worktreeRoot()
+ *   - protects every non-`completed` session (in-flight AND failed/aborted/
+ *     interrupted runs retained for inspection, Q3); reclaims `completed`
+ *     leftovers whose terminal delete failed
  *   - respects the 1h grace period
  *   - never touches out-of-root paths or non-`opencode/*` branches
  *   - skips entirely when the flag is OFF
@@ -280,7 +283,7 @@ describe("sweepWorktrees — boot orphan sweep", () => {
     expect(client.deleteWorktree).not.toHaveBeenCalled();
   });
 
-  it("DOES remove a worktree whose only referencing session is terminal", async () => {
+  it("DOES remove a COMPLETED session's kept mapping (failed terminal delete is reclaimed)", async () => {
     enableWorktreeFlag();
     const done = makeWorktreeDir("done-ref", OLD);
     const session = seedSession(done, "opencode/done-ref");
@@ -298,6 +301,63 @@ describe("sweepWorktrees — boot orphan sweep", () => {
 
     expect(client.deleteWorktree).toHaveBeenCalledWith(done);
   });
+
+  it("protects a failed run's retained worktree (Q3) while sweeping orphans and completed leftovers", async () => {
+    enableWorktreeFlag();
+    const failed = makeWorktreeDir("failed-keep", OLD);
+    const orphan = makeWorktreeDir("orphan", OLD);
+    const completedLeftover = makeWorktreeDir("completed-leftover", OLD);
+
+    const failedSession = seedSession(failed, "opencode/failed-keep");
+    getRawDb()
+      .prepare("UPDATE execution_sessions SET status = 'failed' WHERE id = ?")
+      .run(failedSession.id);
+
+    // A completed run whose terminal delete failed keeps its mapping and is the
+    // sweep's job to reclaim (no permanent leak).
+    const completedSession = seedSession(completedLeftover, "opencode/completed-leftover");
+    getRawDb()
+      .prepare("UPDATE execution_sessions SET status = 'completed' WHERE id = ?")
+      .run(completedSession.id);
+
+    const client = fakeClient();
+    client.listWorktrees.mockResolvedValue([failed, orphan, completedLeftover]);
+
+    await sweepWorktrees(getDb(), client, vi.fn(), {
+      now: () => Date.now(),
+      branchOf: (dir) => `opencode/${path.basename(dir)}`,
+    });
+
+    // Failed: retained for inspection → never touched.
+    expect(client.deleteWorktree).not.toHaveBeenCalledWith(failed);
+    expect(client.resetWorktree).not.toHaveBeenCalledWith(failed);
+    // Orphan + completed leftover: both reclaimed.
+    expect(client.deleteWorktree).toHaveBeenCalledWith(orphan);
+    expect(client.deleteWorktree).toHaveBeenCalledWith(completedLeftover);
+    expect(client.deleteWorktree).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["aborted", "interrupted"] as const)(
+    "protects a %s run's retained worktree (Q3)",
+    async (status) => {
+      enableWorktreeFlag();
+      const kept = makeWorktreeDir(`keep-${status}`, OLD);
+      const session = seedSession(kept, `opencode/keep-${status}`);
+      getRawDb()
+        .prepare("UPDATE execution_sessions SET status = ? WHERE id = ?")
+        .run(status, session.id);
+      const client = fakeClient();
+      client.listWorktrees.mockResolvedValue([kept]);
+
+      await sweepWorktrees(getDb(), client, vi.fn(), {
+        now: () => Date.now(),
+        branchOf: () => `opencode/keep-${status}`,
+      });
+
+      expect(client.deleteWorktree).not.toHaveBeenCalled();
+      expect(client.resetWorktree).not.toHaveBeenCalled();
+    },
+  );
 
   it("never touches a non-opencode/* branch", async () => {
     enableWorktreeFlag();
