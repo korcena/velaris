@@ -9,7 +9,7 @@ direct-Ollama tool loop for `executionProvider='ollama'` houses. Models are supp
 
 ## Status
 
-Phases 1–5 and Phase 6 part 1 (6.1) are implemented and tested:
+Phases 1–5 and Phase 6 (6.1 and 6.2) are implemented and tested:
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -20,7 +20,7 @@ Phases 1–5 and Phase 6 part 1 (6.1) are implemented and tested:
 | 4 — High Lord | Orchestrator house, planning, delegation, DAG scheduling, handoffs, mid-plan steering, burning-castle abort | ✅ Done |
 | 5 — Ollama-Native Agent Runtime | Direct-Ollama provider + tool loop, permission-gated fs/shell/git tools, native pause/resume, estimated cost tracking, flag-gated worktree scaffold | ✅ Done |
 | 6 — Advanced Platform (6.1) | Audit log, multi-agent houses, house/project templates, archives search, usage/cost dashboards, monitoring panel | ✅ Done |
-| 6.2 — Advanced Platform (deferred) | Real worktree isolation, FTS5 archives, per-agent cost rollups, audit retention/export | ⏳ Planned |
+| 6.2 — Advanced Platform | Real per-run worktree isolation (flag-gated), FTS5 archive index with LIKE fallback, per-agent cost rollups, audit export + retention prune, `tasks.created_at` indexes | ✅ Done |
 
 See the [implementation plan](./docs/IMPLEMENTATION_PLAN.md) for the full phase breakdown
 and MVP acceptance journey.
@@ -104,12 +104,18 @@ and MVP acceptance journey.
   your own. Instantiate and edit normally; wrong-kind payloads are rejected, not silently
   zeroed.
 - **Consult the archives** — search the city's history by text or house across past quests,
-  sessions, artifacts, and messages, with pagination over the full record.
-- **Read the ledgers** — usage and cost dashboards break spend down by house, model, and time,
-  separating provider-reported cost from estimated (Ollama) cost. The home dashboard also
+  sessions, artifacts, and messages, with pagination over the full record. An FTS5 index
+  (`archives_fts`) widens recall automatically, with the original `LIKE` search as the
+  always-on fallback for substring/prefix queries.
+- **Read the ledgers** — usage and cost dashboards break spend down by house, model, agent, and
+  time, separating provider-reported cost from estimated (Ollama) cost. The home dashboard also
   shows engine health, queue depth, and error rate at a glance.
 - **Keep the chronicle** — Settings shows an audit log of user actions (houses, agents,
-  projects, provider configs, templates, and approval responses).
+  projects, provider configs, templates, and approval responses), with **CSV/JSON export** and
+  an optional retention window (keep forever by default); pruning runs in the engine.
+- **Isolate OpenCode runs (experimental)** — with `experimental.worktreeIsolation` enabled each
+  OpenCode run executes in its own git worktree (created against the task's repo), recorded on
+  the session; completed runs are cleaned up and leftovers are swept on boot. Off by default.
 
 ## Setup
 
@@ -182,11 +188,14 @@ stream with backoff reconnect and boot-time reconciliation of orphaned sessions.
   (path-escape/shell guards), the provider seam, migration data-preservation (including the
   Phase-1-head migration-chain safety test and seeded-real-DB guard), pause/resume,
   city-map camera/island-layout/terrain/status/palette logic, diff parsing, multi-agent routing, template
-  instantiation, archive search, audit writes, usage reconciliation (estimated vs
-  provider-reported, with a double-count guard), and monitoring queries. Integration tests
+  instantiation, archive search (FTS5 + LIKE fallback), audit writes/export/retention, usage
+  reconciliation (estimated vs provider-reported, with a double-count guard and per-agent
+  rollups), worktree client/cleanup/sweep (flag-off guarantees the untouched path), and
+  monitoring queries. Integration tests
   invoke API route handlers directly against a temp database.
 - **E2E (Playwright)** — full UI journeys (house lifecycle, quest board, roost approvals,
   city map, house panel, the High Lord Court, the Phase 5 Ollama UI surface, and the Phase 6
-  surfaces: templates, archives, audit, multi-agent houses, and usage/monitoring dashboards).
+  surfaces: templates, archives, audit, multi-agent houses, usage/monitoring dashboards, and
+  the worktree-isolation setting).
   E2E boots web-only with a dedicated database and does **not** start the engine; external
   OpenCode/Ollama calls are mocked for determinism.
