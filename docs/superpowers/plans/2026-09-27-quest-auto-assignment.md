@@ -31,7 +31,14 @@ Pure function, no DB access (mirrors `resolve-plan.ts`):
 
 ```
 chooseQuestHouse(
-  signal: { title: string; type: string; description: string; workingDirectory: string | null },
+  signal: {
+    title: string;
+    type: string;
+    description: string;
+    workingDirectory: string | null;
+    /** The task's own project directory (`projectDirectoryForTask`), or null. */
+    projectDirectory: string | null;
+  },
   houses: HouseDto[],                          // may include the High Lord
   effectiveAllowlists: Map<string, string[]>,  // houseId → effectiveWorkspaceAllowlist(...)
 ): RoutingDecision
@@ -39,14 +46,19 @@ chooseQuestHouse(
 
 1. `candidates = houses.filter(h => h.status === 'active' && h.kind === 'agent')`
    (same predicate as `resolvePlan`).
-2. **Workspace-viability filter, before scoring** (resolved A1). Keep a candidate iff:
-   - `workingDirectory != null` → `isPathAllowed(workingDirectory, effectiveAllowlists.get(h.id) ?? [])`; **or**
-   - `workingDirectory == null` → its effective allowlist is **non-empty** (so `resolveWorkspace`
-     has an `allowlist[0]` fallback). A `null` directory with an empty effective allowlist is
-     **not** viable (it would fail at claim), so it neither routes nor counts; such a quest
-     escalates and, if the High Lord also has no directory, terminates as `no_directory`.
-   An empty *effective* allowlist means "zero registered projects" and is never treated as
-   universally viable when a directory is present.
+2. **Workspace-viability filter, before scoring (resolved A1; corrected to mirror
+   `resolveWorkspace` exactly).** The pure module must derive the same run directory `D` the
+   queue's `resolveWorkspace` will, per candidate house `h`:
+   - `emptyHouseAllowlist = h.configuration.workspaceAllowlist.length === 0`
+   - `effective = effectiveAllowlists.get(h.id) ?? []`
+   - `D = signal.workingDirectory ?? (emptyHouseAllowlist ? signal.projectDirectory : null)`
+   - viable iff `D != null ? isPathAllowed(D, effective) : (!emptyHouseAllowlist && effective.length > 0)`
+
+   `signal.projectDirectory` is the task's own project directory (computed by the caller via
+   `projectDirectoryForTask(db, task)`), NOT the first registered project. This is the only rule
+   that cannot route-then-fail: an empty house allowlist with no working directory and no project
+   yields `D = null` and is **not viable**; a non-empty house allowlist with no working directory
+   is viable via its `allowlist[0]` fallback. See corrected Resolved decision A1 below.
 3. `scores = candidates.map(h => ({ h, score: scoreHouse({ houseHints: signal.description, type: signal.type, title: signal.title }, h) }))`.
    Sort score DESC, stable, so equal scores keep the input (roster) order.
 4. `best = scores[0]`, `runnerUpScore = scores[1]?.score ?? 0`.
@@ -144,8 +156,10 @@ Verify: `npx tsc --noEmit`; write `tests/unit/route-quest.test.ts` (Stage 6) and
 
 ### Stage 3 — Pre-claim wiring in `TaskQueue.processOnce()`
 `src/engine/queue.ts`:
-- Imports: `setTaskHouse` (task-repo); `listHouses`, `findHighLordHouse` (house-repo);
-  `chooseQuestHouse`, `type RoutingDecision`, `type RoutingReason` (route-quest).
+- Stage 3 imports: `setTaskHouse` (task-repo); `listHouses`, `findHighLordHouse` (house-repo);
+  `chooseQuestHouse`, `type RoutingDecision`, `type RoutingReason` (route-quest); and add
+  `projectDirectoryForTask` (from `@/server/repositories/workspace`, already the source of
+  `effectiveWorkspaceAllowlist`).
 - In `processOnce()`'s per-task loop, restructure the top so routing runs **before** the existing
   provider health gate and **before** `claimQueuedTask`:
   ```ts
@@ -165,7 +179,7 @@ Verify: `npx tsc --noEmit`; write `tests/unit/route-quest.test.ts` (Stage 6) and
   2. Build `effectiveAllowlists = new Map<string, string[]>()` by
      `effectiveWorkspaceAllowlist(db, h.configuration)` for each house (one list per house per
      routing decision).
-  3. `const decision = chooseQuestHouse({ title: task.title, type: task.type, description: task.description, workingDirectory: task.workingDirectory }, houses, effectiveAllowlists);`
+  3. `const decision = chooseQuestHouse({ title: task.title, type: task.type, description: task.description, workingDirectory: task.workingDirectory, projectDirectory: projectDirectoryForTask(db, task) }, houses, effectiveAllowlists);`
   4. `decision.houseId != null` (routed **or** escalated to HL) → `setTaskHouse(db, task.id, decision.houseId)` and emit the routing event (Stage 4), then `return`.
   5. Terminal (`houseId == null`) → `setTaskStatus(db, task.id, "failed", msg)` +
      `createExecutionEvent({ taskId, houseId: null, rawType: "task_failed", type: "task_failed", payload: { error: msg, routing: { houseId: null, escalated: decision.escalated, reason: decision.reason, score: decision.score } } })`.
@@ -210,10 +224,15 @@ Model the fixture style on `tests/unit/plan-resolve.test.ts` (`house(over)` help
 3. **Weak single-word → escalate** — one-word overlap (score 1 < 2) → escalate, `reason: "weak_match"`.
 4. **No agent houses → escalate** — only HL in `houses` → `escalated: true`, `reason: "no_agent_houses"`.
 5. **HL absent → fail** — no candidates and no HL → `{ houseId: null, escalated: false, reason: "no_high_lord" }`.
-6. **Workspace filter** — candidate with a non-empty allowlist not containing `workingDirectory` is
-   excluded (its score, even high, cannot route); a viable candidate routes. Also: empty effective
-   allowlist + non-null directory → excluded. Empty effective allowlist + `null` directory →
-   excluded (per A1).
+6. **Workspace filter** — cases must mirror `resolveWorkspace`:
+   - candidate with a non-empty house allowlist not containing a present `workingDirectory` is
+     excluded (its score, even high, cannot route); a viable candidate routes.
+   - empty **house** allowlist + present `workingDirectory` inside the effective (project-derived)
+     allowlist → viable.
+   - `workingDirectory == null` + empty **house** allowlist + `projectDirectory == null` → **not**
+     viable (excluded; escalation follows) — the default Board flow.
+   - `workingDirectory == null` + empty house allowlist + `projectDirectory != null` → viable.
+   - `workingDirectory == null` + non-empty house allowlist → viable (via `allowlist[0]` fallback).
 7. **No-directory → fail** — no candidates, HL present, `workingDirectory == null` and HL
    `workspaceAllowlist` empty → `{ houseId: null, escalated: false, reason: "no_directory" }`.
 Assert reason, `escalated`, `houseId`, and `score` explicitly (not just houseId).
@@ -297,11 +316,19 @@ run is required.
 
 ## Resolved decisions (were flagged as ambiguities)
 
-- **A1 — Workspace viability (resolved, see routing rule step 2).** `workingDirectory != null`
-  requires `isPathAllowed` against the house's *effective* allowlist; `workingDirectory == null`
-  requires a non-empty effective allowlist (so `allowlist[0]` can serve as the run dir). An empty
-  effective list with a present directory is excluded. This avoids routing into an instant
-  `resolveSafePath` failure.
+- **A1 — Workspace viability (resolved; CORRECTED after review — see routing rule step 2).** The
+  earlier "effective allowlist non-empty ⇒ viable" rule was wrong: the queue's `resolveWorkspace`
+  only uses the effective/project directory when the task has a project; an empty *house* allowlist
+  with no `workingDirectory` and no project fails at claim. The filter must mirror `resolveWorkspace`
+  exactly, including the task's **own** project directory. This means `QuestSignal` gains a
+  `projectDirectory` field (computed by the engine caller via `projectDirectoryForTask(db, task)`),
+  and the pure module's null-directory viability uses `!emptyHouseAllowlist && effective.length > 0`.
+  Rationale: this is the only rule that cannot route-then-fail, satisfying the design's stated goal.
+  (Original mis-resolution retained below for the record.)
+- **A1 (original, superseded).** "Empty effective allowlist + present dir excluded; null dir
+  requires non-empty effective allowlist." This let the default Board flow (house/project/dir all
+  null, seeded empty-allowlist houses, ≥1 registered project) pass the filter and then fail at
+  claim instead of escalating. Superseded by the corrected rule above.
 - **A2 — Terminal failures live in the pure module (resolved).** Add reasons `no_high_lord` and
   `no_directory` with `escalated: false, houseId: null`. Keeping them in `chooseQuestHouse` keeps
   the whole decision in one pure, unit-testable place; the engine only maps `null` →
