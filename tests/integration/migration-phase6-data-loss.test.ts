@@ -287,4 +287,57 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("0010 creates archives_fts (additive) and backfills pre-existing tasks without losing rows", () => {
+    if (!upgraded) return;
+    const db = new Database(upgradePath);
+    db.pragma("foreign_keys = ON");
+
+    // The virtual table exists.
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='archives_fts'")
+          .get() as { c: number }
+      ).c,
+    ).toBe(1);
+
+    // The pre-existing task (with its artifact + message) was backfilled.
+    const indexed = db
+      .prepare("SELECT task_id, title, artifact_text FROM archives_fts WHERE task_id = 'task-p6'")
+      .get() as { task_id: string; title: string; artifact_text: string } | undefined;
+    expect(indexed).toBeTruthy();
+    expect(indexed!.title).toBe("Phase 6 survivor");
+    expect(indexed!.artifact_text).toContain("precious phase 6 data");
+
+    // Source rows all survive (nothing was consumed or rebuilt).
+    const survivors = {
+      task: count(db, "tasks", "id='task-p6'"),
+      session: count(db, "execution_sessions", "id='sess-p6'"),
+      message: count(db, "agent_messages", "id='msg-p6'"),
+      artifact: count(db, "artifacts", "id='art-p6'"),
+    };
+    expect(survivors).toEqual({ task: 1, session: 1, message: 1, artifact: 1 });
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
+
+  it("0010 second migrate is idempotent — FTS rows and sources are unchanged", () => {
+    if (!upgraded) return;
+    const ftsBefore = (() => {
+      const db = new Database(upgradePath, { readonly: true });
+      const c = (db.prepare("SELECT COUNT(*) c FROM archives_fts").get() as { c: number }).c;
+      db.close();
+      return c;
+    })();
+    migrate(upgradePath);
+    resetDbForTests();
+    const db = new Database(upgradePath);
+    expect(count(db, "tasks", "id='task-p6'")).toBe(1);
+    // A second migrate does not re-run the backfill (the journal records 0010
+    // as applied); the row count is unchanged.
+    expect((db.prepare("SELECT COUNT(*) c FROM archives_fts").get() as { c: number }).c).toBe(ftsBefore);
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });

@@ -442,6 +442,67 @@ describe("full migration chain from the Phase 1 schema head", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("the 0010 archives_fts migration is ADDITIVE (virtual table + triggers + backfill, no DROP/PRAGMA)", () => {
+    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, "0010_archives_fts.sql"), "utf8");
+    // Strip SQL line comments so the additive header's prose ("NO DROP…") does
+    // not satisfy/defeat the DDL assertions below.
+    const ddl = sql.replace(/--[^\n]*/g, "");
+    // Phase 6.2 Stage S2: a standalone FTS5 index and sync triggers only. No
+    // real table is dropped/rebuilt and no in-file PRAGMA (a no-op inside the
+    // migrator's single transaction).
+    expect(ddl).not.toMatch(/\bDROP\b/i);
+    expect(ddl).not.toMatch(/PRAGMA/i);
+    expect(ddl).not.toMatch(/ALTER\s+TABLE/i);
+    expect(ddl).toMatch(/CREATE VIRTUAL TABLE archives_fts USING fts5/i);
+    expect(ddl).toMatch(/tokenize='unicode61'/i);
+    for (const t of ["tasks", "artifacts", "agent_messages"]) {
+      expect(ddl).toMatch(new RegExp(`AFTER (INSERT|UPDATE|DELETE) ON ${t}\\b`, "i"));
+    }
+  });
+
+  it("0010 lands archives_fts + sync triggers, backfills pre-existing tasks, FK-clean", () => {
+    const db = new Database(dbPath);
+    // The virtual table exists.
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='archives_fts'")
+          .get() as { c: number }
+      ).c,
+    ).toBe(1);
+
+    // Every source table has INSERT/UPDATE/DELETE sync triggers.
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'archives_fts_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    for (const suffix of ["tasks_ai", "tasks_au", "tasks_ad", "artifacts_ai", "artifacts_au", "artifacts_ad", "agent_messages_ai", "agent_messages_au", "agent_messages_ad"]) {
+      expect(triggers).toContain(`archives_fts_${suffix}`);
+    }
+
+    // The pre-existing Phase-1 task was backfilled at migration time.
+    const backfilled = db
+      .prepare("SELECT task_id, title FROM archives_fts WHERE task_id = 't1'")
+      .get() as { task_id: string; title: string } | undefined;
+    expect(backfilled).toEqual({ task_id: "t1", title: "Phase One Task" });
+
+    // Live sync: inserting an artifact updates the owning task's FTS row.
+    db.prepare(
+      "INSERT INTO execution_sessions (id, task_id, house_id, provider, model_id, status) VALUES ('s-fts','t1','h1','opencode','glm-5.3','running')",
+    ).run();
+    db.prepare(
+      "INSERT INTO artifacts (id, session_id, task_id, kind, content) VALUES ('ar-fts','s-fts','t1','result','FTS-SYNC-PROOF')",
+    ).run();
+    const row = db
+      .prepare("SELECT artifact_text FROM archives_fts WHERE task_id = 't1'")
+      .get() as { artifact_text: string };
+    expect(row.artifact_text).toContain("FTS-SYNC-PROOF");
+
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });
 
 /* ================================================================== */

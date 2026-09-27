@@ -127,4 +127,42 @@ describe("GET /api/archives", () => {
     const body = (await res.json()) as { total: number };
     expect(body.total).toBe(0);
   });
+
+  it("serves text search through the FTS index (present after boot) with the same shape", async () => {
+    seedArchives();
+    const raw = getRawDb();
+    // Boot applied 0010: the additive FTS index exists and was backfilled with
+    // the seeded tasks, so the route exercises the FTS branch.
+    expect(
+      (
+        raw
+          .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='archives_fts'")
+          .get() as { c: number }
+      ).c,
+    ).toBe(1);
+
+    const res = await getArchives(req(`${BASE}/api/archives?q=Archived%20Quest%2042`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      entries: Array<{ taskId: string; title: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+    };
+    expect(body.total).toBe(1);
+    expect(body.entries[0].taskId).toBe("at-42");
+    expect(body.limit).toBe(25);
+    expect(body.offset).toBe(0);
+  });
+
+  it("returns 200 (never 500) for FTS-hostile query syntax", async () => {
+    seedArchives();
+    for (const q of ['"', "*", "-", "OR", "NEAR", "(", ")", '"*', 'a"b', "%", "_", "\\"]) {
+      const res = await getArchives(req(`${BASE}/api/archives?q=${encodeURIComponent(q)}`));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { entries: unknown[]; total: number };
+      expect(Array.isArray(body.entries)).toBe(true);
+      expect(typeof body.total).toBe("number");
+    }
+  });
 });

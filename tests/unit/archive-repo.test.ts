@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { escapeLike, searchArchives } from "@/server/repositories/archive-repo";
+import { escapeLike, hasArchiveFts, searchArchives } from "@/server/repositories/archive-repo";
 import { searchArchivesService } from "@/server/services/archive-service";
 import { createHouse } from "@/server/repositories/house-repo";
 import type { HouseConfiguration } from "@/shared/types";
@@ -270,6 +270,81 @@ describe("LIKE wildcard escaping", () => {
     // A task that merely starts with "discount 50" (no %) must not match.
     const noMatch = search({ q: "50%zzz" });
     expect(noMatch.total).toBe(0);
+  });
+});
+
+/* ================================================================== */
+/* Phase 6.2 Stage S2: additive FTS5 index (automatic-if-present)     */
+/* ================================================================== */
+
+describe("archives FTS5 index (automatic-if-present, LIKE fallback)", () => {
+  it("the migration makes archives_fts present and the FTS path is used", () => {
+    expect(hasArchiveFts(getRawDb())).toBe(true);
+    // A normal multi-token text search is served by the index and still finds
+    // the task by title.
+    const res = search({ q: "Quest 42", limit: 100 });
+    expect(res.total).toBe(1);
+    expect(res.entries[0].taskId).toBe("task-42");
+  });
+
+  it("with FTS present, artifact and message text still match with the same totals", () => {
+    // These two assertions are the regression proof: FTS aggregates artifact
+    // and message text for the task, so the golden searches are unchanged.
+    const artifact = search({ q: "RESULT-MARKER-55", limit: 100 });
+    expect(artifact.total).toBe(1);
+    expect(artifact.entries[0].taskId).toBe("task-55");
+
+    const message = search({ q: "MESSAGE-MARKER-49", limit: 100 });
+    expect(message.total).toBe(1);
+    expect(message.entries[0].taskId).toBe("task-49");
+
+    // Broad text + filters return the same totals as before.
+    expect(search({ q: "alpha", limit: 100 }).total).toBe(60);
+    expect(search({ q: "Quest 10 ", limit: 10 }).entries[0].taskId).toBe("task-10");
+  });
+
+  it("does not throw on FTS-hostile user input (quotes, operators, wildcards)", () => {
+    for (const q of ['"', '""', "*", "-", "OR", "NEAR", "(", ")", '"*', 'a"b', "%", "_", "\\"]) {
+      expect(() => search({ q, limit: 100 })).not.toThrow();
+      // A lone quote / operator must not match everything.
+      expect(search({ q, limit: 100 }).total).toBe(0);
+    }
+    expect(() => search({ q: '  "  *  -  ', limit: 100 })).not.toThrow();
+  });
+
+  it("falls back to LIKE when the FTS table is absent", () => {
+    const raw = getRawDb();
+    raw.exec("DROP TABLE archives_fts");
+    expect(hasArchiveFts(raw)).toBe(false);
+
+    // Same golden searches, same totals, via the retained LIKE path.
+    const artifact = search({ q: "RESULT-MARKER-55", limit: 100 });
+    expect(artifact.total).toBe(1);
+    expect(artifact.entries[0].taskId).toBe("task-55");
+
+    const message = search({ q: "MESSAGE-MARKER-49", limit: 100 });
+    expect(message.total).toBe(1);
+    expect(message.entries[0].taskId).toBe("task-49");
+
+    expect(search({ q: "Quest 42", limit: 100 }).total).toBe(1);
+    expect(search({ q: "alpha", limit: 100 }).total).toBe(60);
+    expect(search({ q: "no-such-text-anywhere" }).total).toBe(0);
+  });
+
+  it("keeps the wildcard-literal LIKE semantics on both paths", () => {
+    const raw = getRawDb();
+    // '%' routes to LIKE (FTS tokenises it away); no task contains a literal
+    // percent yet, so it matches nothing rather than everything.
+    expect(search({ q: "%", limit: 100 }).total).toBe(0);
+
+    raw
+      .prepare("UPDATE tasks SET description = 'has under_score here' WHERE id = 'task-1'")
+      .run();
+    expect(search({ q: "_", limit: 100 }).total).toBe(1);
+
+    raw.prepare("UPDATE tasks SET title = 'discount 50% off' WHERE id = 'task-2'").run();
+    expect(search({ q: "50%", limit: 100 }).total).toBe(1);
+    expect(search({ q: "50%zzz", limit: 100 }).total).toBe(0);
   });
 });
 

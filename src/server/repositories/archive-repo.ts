@@ -2,10 +2,13 @@
  * Archive repository (Phase 6 Stage D) — read-only searchable history over
  * terminal tasks.
  *
- * Q5 decision: `LIKE` + indexes over existing tables for 6.1. No new table, no
- * FTS5, no writer — the engine's single-writer discipline is untouched. The
- * FTS5 external-content index is documented as the 6.2 upgrade if text volume
- * outgrows `LIKE`.
+ * Q5 decision: `LIKE` + indexes over existing tables for 6.1. Phase 6.2 Stage S2
+ * adds an additive FTS5 index (`archives_fts`, migration 0010) aggregating task,
+ * artifact and agent-message text. It is used **automatically when present** for
+ * the text `q` filter and kept in sync by triggers; when the index is missing
+ * (an unmigrated DB) or a query cannot be represented faithfully by FTS
+ * tokenisation, the original `LIKE` path remains the fallback. There is still no
+ * repository writer — the engine's single-writer discipline is untouched.
  *
  * Text matches task `title`/`description` plus artifact/agent-message content
  * for the task's sessions. `q` is escaped so `%`, `_` and the escape character
@@ -28,6 +31,39 @@ const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "interrupted"] as
  */
 export function escapeLike(input: string): string {
   return input.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * True when the additive FTS5 archive index (migration 0010) is present. The
+ * index is optional: an older DB that has not run 0010 silently uses the
+ * `LIKE` fallback, so this must never throw when the table is absent.
+ */
+export function hasArchiveFts(raw: Database.Database): boolean {
+  const row = raw
+    .prepare(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='archives_fts') AS e",
+    )
+    .get() as { e: number } | undefined;
+  return row?.e === 1;
+}
+
+/**
+ * Turn arbitrary user text into a safe FTS5 `MATCH` expression.
+ *
+ * Every whitespace-delimited token is wrapped in double quotes (FTS5 phrase
+ * quoting) with embedded `"` doubled, so FTS operators (`*`, `-`, `OR`, `NEAR`,
+ * `(`, `)`, `^`, `:`) and wildcards are all treated as literal token text and a
+ * `MATCH` built from this can never raise a syntax error. Multiple quoted
+ * tokens are an implicit AND, matching the old `LIKE` behaviour for normal
+ * multi-word searches. Returns "" for blank input (the caller then skips FTS).
+ */
+export function sanitizeFtsQuery(input: string): string {
+  return input
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
+    .join(" ");
 }
 
 /** First non-empty line of a string, trimmed and length-capped for the UI. */
@@ -71,7 +107,7 @@ function rowToDto(row: ArchiveRow): ArchiveEntryDto {
 }
 
 /** Build the shared WHERE clause + bound params for both the page and count. */
-function buildWhere(query: ArchiveQuery): { sql: string; params: unknown[] } {
+function buildWhere(query: ArchiveQuery, raw: Database.Database): { sql: string; params: unknown[] } {
   const clauses: string[] = [
     `t.status IN (${TERMINAL_STATUSES.map(() => "?").join(",")})`,
   ];
@@ -98,21 +134,34 @@ function buildWhere(query: ArchiveQuery): { sql: string; params: unknown[] } {
     params.push(query.to);
   }
   if (query.q) {
-    const like = `%${escapeLike(query.q)}%`;
-    clauses.push(
-      `(t.title LIKE ? ESCAPE '\\'
-        OR t.description LIKE ? ESCAPE '\\'
-        OR EXISTS (
-          SELECT 1 FROM artifacts a
-           WHERE a.task_id = t.id AND a.content LIKE ? ESCAPE '\\'
-        )
-        OR EXISTS (
-          SELECT 1 FROM agent_messages am
-            JOIN execution_sessions s2 ON s2.id = am.session_id
-           WHERE s2.task_id = t.id AND am.content LIKE ? ESCAPE '\\'
-        ))`,
-    );
-    params.push(like, like, like, like);
+    // Automatic-if-present: use the additive FTS index when it exists. Queries
+    // containing `%`, `_` or `\` fall back to LIKE because the FTS `unicode61`
+    // tokenizer treats those as separators and cannot reproduce LIKE's literal
+    // wildcard semantics (e.g. a literal "50%" or "_" query).
+    const fts = hasArchiveFts(raw) && !/[\\%_]/.test(query.q) ? sanitizeFtsQuery(query.q) : "";
+    if (fts) {
+      clauses.push(
+        "EXISTS (SELECT 1 FROM archives_fts f WHERE f.task_id = t.id AND archives_fts MATCH ?)",
+      );
+      params.push(fts);
+    } else {
+      // LIKE fallback (index absent or tokenisation would lose punctuation).
+      const like = `%${escapeLike(query.q)}%`;
+      clauses.push(
+        `(t.title LIKE ? ESCAPE '\\'
+          OR t.description LIKE ? ESCAPE '\\'
+          OR EXISTS (
+            SELECT 1 FROM artifacts a
+             WHERE a.task_id = t.id AND a.content LIKE ? ESCAPE '\\'
+          )
+          OR EXISTS (
+            SELECT 1 FROM agent_messages am
+              JOIN execution_sessions s2 ON s2.id = am.session_id
+             WHERE s2.task_id = t.id AND am.content LIKE ? ESCAPE '\\'
+          ))`,
+      );
+      params.push(like, like, like, like);
+    }
   }
 
   return { sql: clauses.join(" AND "), params };
@@ -128,7 +177,7 @@ export function searchArchives(
   query: ArchiveQuery,
 ): { entries: ArchiveEntryDto[]; total: number } {
   const raw: Database.Database = rawDb(db);
-  const where = buildWhere(query);
+  const where = buildWhere(query, raw);
 
   const countRow = raw
     .prepare(`SELECT COUNT(*) AS c FROM tasks t WHERE ${where.sql}`)
