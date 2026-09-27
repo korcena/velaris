@@ -64,7 +64,11 @@ starts meaning "bounded by your project registry".
 ## Behavior
 
 - **Quest directory `D`** = `task.workingDirectory` ?? the task's project
-  directory.
+  directory. The project-directory fallback applies **only when the house
+  allowlist is empty**: for a non-empty allowlist the existing `allowlist[0]`
+  fallback is kept, because a project directory outside the house's own roots
+  would otherwise be rejected — that would break the byte-identity contract and
+  a correctly-scoped house.
 - **Fallback (`D` absent), non-empty allowlist:** unchanged — use
   `allowlist[0]`.
 - **Fallback (`D` absent), empty allowlist:** do **not** arbitrarily pick the

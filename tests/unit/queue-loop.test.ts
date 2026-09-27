@@ -24,16 +24,20 @@ import {
   setTaskStatus,
   listQueuedTaskIds,
 } from "@/server/repositories/task-repo";
+import { createProject } from "@/server/repositories/project-repo";
+import { listEventsForTask } from "@/server/repositories/execution-repo";
+import { WORKSPACE_UNREGISTERED_MESSAGE } from "@/server/repositories/workspace";
 import type { AgentExecutionProvider } from "@/server/execution/types";
 import type { HouseConfiguration } from "@/shared/types";
 import { OpencodeClient } from "@/server/opencode";
 
 // Mock the runner so the queue never performs real OpenCode/SSE work.
 vi.mock("@/server/execution/runner", () => ({
-  executeTask: () => Promise.resolve({ sessionId: "sess", terminalStatus: "completed" }),
+  executeTask: vi.fn(() => Promise.resolve({ sessionId: "sess", terminalStatus: "completed" })),
 }));
 
 import { TaskQueue } from "@/engine/queue";
+import { executeTask } from "@/server/execution/runner";
 
 let tmpDir: string;
 let dbPath: string;
@@ -78,6 +82,7 @@ beforeEach(() => {
   process.env.VELARIS_DB_PATH = dbPath;
   migrate();
   logMock = vi.fn();
+  (executeTask as unknown as ReturnType<typeof vi.fn>).mockClear();
 });
 
 afterEach(() => {
@@ -121,6 +126,59 @@ describe("TaskQueue", () => {
     await runOnePass(queue);
 
     expect(listQueuedTaskIds(getRawDb())).toEqual([]);
+  });
+
+  it("empty house allowlist + task dir registered as a project → claimed and executed", async () => {
+    // An empty allowlist means "bounded by the registered projects". Register
+    // this task's directory as a project; the task must run.
+    createProject(getDb(), {
+      name: "Quest Project",
+      directory: tmpDir,
+      gitInfo: { branch: null, remote: null, dirty: false },
+    });
+    const house = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeHouseConfig([]),
+    });
+    const task = createTask(getDb(), {
+      title: "T",
+      houseId: house.id,
+      workingDirectory: tmpDir,
+    });
+
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    expect(executeTask).toHaveBeenCalled();
+    expect(getTask(getDb(), task.id)?.status).toBe("running");
+  });
+
+  it("empty house allowlist + unregistered task dir → failed with the actionable message, runner NOT called", async () => {
+    const house = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeHouseConfig([]),
+    });
+    const task = createTask(getDb(), {
+      title: "T",
+      houseId: house.id,
+      workingDirectory: tmpDir, // not registered as a project
+    });
+
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    const after = getTask(getDb(), task.id)!;
+    expect(after.status).toBe("failed");
+    // The task_failed event's error equals the exact actionable message.
+    const failure = listEventsForTask(getDb(), task.id).find((e) => e.type === "task_failed");
+    expect(failure?.payload.error).toBe(WORKSPACE_UNREGISTERED_MESSAGE);
+    expect(executeTask).not.toHaveBeenCalled();
   });
 
   it("health-gates: no claim while OpenCode is unhealthy (task stays queued)", async () => {

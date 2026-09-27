@@ -52,6 +52,7 @@ import {
 } from "@/server/repositories/execution-repo";
 import { setTaskStatus, getTask } from "@/server/repositories/task-repo";
 import { listProviderConfigs } from "@/server/repositories/provider-config-repo";
+import { effectiveWorkspaceAllowlist } from "@/server/repositories/workspace";
 import { parsePricing, estimateCost, type ModelPricing } from "./pricing";
 
 /** Loop safeguards (plan §17 risk 3) — OLLAMA_DEFAULTS. */
@@ -118,7 +119,7 @@ export async function runOllamaTask(
   const registry = buildToolRegistry(configuration);
   const toolMap: Map<string, OllamaTool> = new Map(registry.map((t) => [t.name, t]));
   const toolDefs = toOllamaToolDefs(registry);
-  const allowlist = configuration.workspaceAllowlist;
+  const allowlist = effectiveWorkspaceAllowlist(db, configuration);
 
   const taskPrompt = composeTaskPrompt(task);
 

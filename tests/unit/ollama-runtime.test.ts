@@ -28,6 +28,7 @@ import { getDb, getRawDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
 import { createHouse, getHouse } from "@/server/repositories/house-repo";
 import { createTask, getTask } from "@/server/repositories/task-repo";
+import { createProject } from "@/server/repositories/project-repo";
 import {
   createExecutionEvent,
   createExecutionSession,
@@ -190,6 +191,64 @@ describe("runOllamaTask — mocked tool-loop smoke", () => {
       // Ollama cost is always an estimate; missing price ⇒ cost 0 (honest).
       expect(u.estimated).toBe(1);
     }
+  });
+
+  it("empty house allowlist + workspace registered as a project → an in-workspace fs_read executes (not ask)", async () => {
+    // Empty allowlist = bounded by the registered projects. The runtime must
+    // compute `pathInsideAllowlist` against that effective list so an in-project
+    // read is classified INSIDE (fileSystem='ask' would otherwise gate it).
+    createProject(getDb(), {
+      name: "Workspace Project",
+      directory: workspace,
+      gitInfo: { branch: null, remote: null, dirty: false },
+    });
+    const config = makeConfig({
+      workspaceAllowlist: [],
+      permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+    });
+    fs.writeFileSync(path.join(workspace, "a.txt"), "the answer is 42");
+    const { result } = await runSmoke(config, [
+      { message: { role: "assistant", content: "reading", tool_calls: [fsReadCall(path.join(workspace, "a.txt"))] } },
+      finalAnswer("done"),
+    ]);
+    expect(result.terminalStatus).toBe("completed");
+    // No approval was requested for the in-allowlist read (it executed directly).
+    expect(listApprovalRequests(getDb(), {})).toHaveLength(0);
+  });
+
+  it("empty house allowlist + path outside the registered projects → gated (ask)", async () => {
+    createProject(getDb(), {
+      name: "Workspace Project",
+      directory: workspace,
+      gitInfo: { branch: null, remote: null, dirty: false },
+    });
+    const config = makeConfig({
+      workspaceAllowlist: [],
+      permissions: { fileSystem: "ask", shell: "ask", network: "deny", git: "allow" },
+    });
+    const outside = path.join(outsideDir, "file.txt");
+    const stub = scriptedChat([
+      { message: { role: "assistant", content: "reading outside", tool_calls: [fsReadCall(outside)] } },
+      finalAnswer("done"),
+    ]);
+    const house = createHouse(getDb(), { name: "H", description: null, agent: { name: "A", role: "R" }, configuration: config });
+    const task = createTask(getDb(), { title: "T", houseId: house.id, workingDirectory: workspace });
+    const ollama = ({ chat: stub.chat } as unknown) as OllamaClient;
+
+    const runPromise = runOllamaTask(
+      { db: getDb(), raw: getRawDb(), ollama, task: getTask(getDb(), task.id)!, house: getHouse(getDb(), house.id)!, directory: workspace, modelId: config.modelId },
+      { pollMs: 20 },
+    );
+    for (let i = 0; i < 200; i++) {
+      await flush();
+      if (listApprovalRequests(getDb(), {}).some((a) => a.status === "pending")) break;
+    }
+    const pending = listApprovalRequests(getDb(), {}).find((a) => a.status === "pending");
+    expect(pending).toBeDefined();
+    expect(pending?.title).toContain("Read outside workspace");
+    setApprovalResponse(getDb(), pending!.id, "approved", null);
+    const result = await runPromise;
+    expect(result.terminalStatus).toBe("completed");
   });
 
   it("aggregates a multi-call run honestly (B1): terminal-only usage records with REAL summed totals, not per-call cumulative rows", async () => {

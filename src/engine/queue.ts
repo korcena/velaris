@@ -27,6 +27,11 @@ import {
 } from "@/server/repositories/task-repo";
 import { createExecutionEvent, getActiveSessionForHouse } from "@/server/repositories/execution-repo";
 import { resolveSafePath, isPathAllowed, worktreeRoot } from "@/lib/paths";
+import {
+  effectiveWorkspaceAllowlist,
+  projectDirectoryForTask,
+  WORKSPACE_UNREGISTERED_MESSAGE,
+} from "@/server/repositories/workspace";
 import { getWorktreeIsolationEnabled } from "@/server/repositories/provider-config-repo";
 import { cleanupWorktree, resolveWorktree, type ResolvedWorktree } from "./worktree";
 import { runParent, tickActivePlans } from "./orchestrator";
@@ -227,7 +232,12 @@ export class TaskQueue {
       const runtimeAgentId = runtimeAgent?.id ?? null;
       const provider: ProviderKind = runtimeConfig.executionProvider;
 
-      const resolvedDir = this.resolveWorkspace(db, task, house, runtimeConfig);
+      // Workspace resolution: one effective list per claim, threaded through
+      // resolveWorkspace and the worktree calls so every gate agrees (empty house
+      // allowlist = bounded by the project registry).
+      const effectiveAllowlist = effectiveWorkspaceAllowlist(db, runtimeConfig);
+
+      const resolvedDir = this.resolveWorkspace(db, task, house, runtimeConfig, effectiveAllowlist);
       if (!resolvedDir) return;
 
       // Phase 6.2 Stage S1.4/S1.5 — OpenCode worktree isolation (default OFF).
@@ -258,10 +268,10 @@ export class TaskQueue {
             client,
             task,
             sourceDirectory: resolvedDir,
-            houseAllowlist: runtimeConfig.workspaceAllowlist,
+            houseAllowlist: effectiveAllowlist,
           });
           // Validate the final run dir against the augmented allowlist (S1.5).
-          resolveSafePath(worktree.directory, [...runtimeConfig.workspaceAllowlist, worktreeRoot()]);
+          resolveSafePath(worktree.directory, [...effectiveAllowlist, worktreeRoot()]);
           runDirectory = worktree.directory;
           this.deps.log(`[queue] task ${task.title} isolated in worktree ${worktree.directory}`);
         } catch (err) {
@@ -358,61 +368,90 @@ export class TaskQueue {
     }
   }
 
-  /** Resolve + validate the ORIGINAL task working directory against the ROUTED
-   * agent's allowlist (defaults to the house configuration for single-agent
-   * houses). Returns the real path, or null (with the task set to a state
-   * indicating block).
+  /** Resolve + validate the ORIGINAL task working directory against the
+   * ROUTED agent's EFFECTIVE allowlist (non-empty house allowlist verbatim;
+   * otherwise the registered-project directories — defaults to the house
+   * configuration for single-agent houses). Returns the real path, or null (with
+   * the task set to failed + a `task_failed` event) when it cannot run.
+   *
+   * Decision table for `D` = `task.workingDirectory`:
+   *  - `D` absent + non-empty allowlist → `allowlist[0]` fallback (unchanged).
+   *  - `D` absent + empty allowlist     → fail with the actionable message
+   *    (never arbitrarily pick the first registered project).
+   *  - `D` present → `resolveSafePath(D, effective)`; on failure the message is
+   *    the actionable one for an empty house allowlist, or the existing
+   *    `working_directory outside house allowlist: …` for a non-empty one.
+   *
+   * This is the same effective rule the orchestrator uses in
+   * `destinationHasUsableWorkspace`, so the two cannot disagree.
    *
    * Phase 6.2 Stage S1.5: this validates the SOURCE repo only. When worktree
    * isolation is ON the worktree directory (under OpenCode's `worktreeRoot()`)
-   * is validated separately against `[...allowlist, worktreeRoot()]`; that single
-   * root is the ONE documented allowlist exception and never appears here.
+   * is validated separately against `[...effectiveAllowlist, worktreeRoot()]`;
+   * that single root is the ONE documented allowlist exception and never appears
+   * here.
    */
   private resolveWorkspace(
     db: VelarisDb,
     task: TaskDto,
     house: HouseDto,
     configuration: HouseConfiguration = house.configuration,
+    effectiveAllowlist: string[] = effectiveWorkspaceAllowlist(db, configuration),
   ): string | null {
-    const dir = task.workingDirectory;
+    const emptyHouseAllowlist = configuration.workspaceAllowlist.length === 0;
+    // D = the task's own working directory; when absent and the house has no
+    // allowlist, fall back to the task's own project directory (never the first
+    // registered project).
+    const dir = task.workingDirectory ?? (emptyHouseAllowlist ? projectDirectoryForTask(db, task) : null);
+
     if (!dir) {
       // If the working directory is missing, try the agent's first allowlist entry.
-      const fallback = configuration.workspaceAllowlist[0];
-      if (fallback && isPathAllowed(fallback, configuration.workspaceAllowlist)) {
-        return resolveSafePath(fallback, configuration.workspaceAllowlist);
+      const fallback = effectiveAllowlist[0];
+      if (!emptyHouseAllowlist && fallback && isPathAllowed(fallback, effectiveAllowlist)) {
+        return resolveSafePath(fallback, effectiveAllowlist);
       }
       this.deps.log(`[queue] task ${task.title}: no working_directory and no valid allowlist entry`);
-      setTaskStatus(db, task.id, "failed", "No working directory and no allowlist entry");
-      return null;
-    }
-
-    if (configuration.workspaceAllowlist.length === 0) {
-      // Plan §6 P2 enforcement: no allowlist → require approval before ANY execution.
-      // We surface this as a blocked task + notification; the runner won't start.
-      this.deps.log(`[queue] task ${task.title}: house has no workspace allowlist — blocked`);
-      setTaskStatus(db, task.id, "failed", "House has no workspace allowlist; execution requires an allowlist entry");
-      createExecutionEvent(db, {
-        taskId: task.id,
-        houseId: house.id,
-        rawType: "task_failed",
-        type: "task_failed",
-        payload: { error: "No workspace allowlist configured" },
-      });
+      if (emptyHouseAllowlist) {
+        setTaskStatus(db, task.id, "failed", WORKSPACE_UNREGISTERED_MESSAGE);
+        createExecutionEvent(db, {
+          taskId: task.id,
+          houseId: house.id,
+          rawType: "task_failed",
+          type: "task_failed",
+          payload: { error: WORKSPACE_UNREGISTERED_MESSAGE },
+        });
+      } else {
+        setTaskStatus(db, task.id, "failed", "No working directory and no allowlist entry");
+      }
       return null;
     }
 
     try {
-      return resolveSafePath(dir, configuration.workspaceAllowlist);
+      return resolveSafePath(dir, effectiveAllowlist);
     } catch (err) {
-      this.deps.log(`[queue] task ${task.title}: path outside allowlist — ${err instanceof Error ? err.message : String(err)}`);
-      setTaskStatus(db, task.id, "failed", `working_directory outside house allowlist: ${err instanceof Error ? err.message : String(err)}`);
-      createExecutionEvent(db, {
-        taskId: task.id,
-        houseId: house.id,
-        rawType: "task_failed",
-        type: "task_failed",
-        payload: { error: "working_directory outside allowlist" },
-      });
+      const detail = err instanceof Error ? err.message : String(err);
+      this.deps.log(`[queue] task ${task.title}: path outside allowlist — ${detail}`);
+      if (emptyHouseAllowlist) {
+        setTaskStatus(db, task.id, "failed", WORKSPACE_UNREGISTERED_MESSAGE);
+        createExecutionEvent(db, {
+          taskId: task.id,
+          houseId: house.id,
+          rawType: "task_failed",
+          type: "task_failed",
+          payload: { error: WORKSPACE_UNREGISTERED_MESSAGE },
+        });
+      } else {
+        // Byte-identical to the pre-effective-allowlist behavior for a non-empty
+        // house allowlist.
+        setTaskStatus(db, task.id, "failed", `working_directory outside house allowlist: ${detail}`);
+        createExecutionEvent(db, {
+          taskId: task.id,
+          houseId: house.id,
+          rawType: "task_failed",
+          type: "task_failed",
+          payload: { error: "working_directory outside allowlist" },
+        });
+      }
       return null;
     }
   }

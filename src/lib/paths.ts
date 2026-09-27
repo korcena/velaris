@@ -59,6 +59,12 @@ export function isAbsolutePath(candidate: string): boolean {
  * equal to) one of the `allowlist` entries. Returns the safe real path on
  * success; throws a descriptive Error on any failure.
  *
+ * Callers pass the EFFECTIVE workspace allowlist
+ * (`effectiveWorkspaceAllowlist(db, configuration)` in
+ * `src/server/repositories/workspace.ts`): a house's non-empty
+ * `workspaceAllowlist` verbatim, otherwise the registered project directories.
+ * This function stays DB-free and applies whatever list it is given.
+ *
  * @param candidate The path to validate (absolute or relative).
  * @param allowlist Entries to allow; each resolved via realpath if it exists.
  * @throws Error when the path is outside the allowlist, does not exist (realpath), or no allowlist exists.

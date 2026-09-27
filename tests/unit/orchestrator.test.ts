@@ -40,7 +40,9 @@ import {
   createUsageRecord,
   createArtifact,
   listEventsForTask,
+  listNotifications,
 } from "@/server/repositories/execution-repo";
+import { createProject } from "@/server/repositories/project-repo";
 import {
   listSubtasksForParent,
   getSubtaskByChildTaskId,
@@ -185,6 +187,15 @@ function seedWorld() {
   const hl = seedHighLordHouse(getDb())!;
   const h1 = seedHouse("House of Mist");
   const h2 = seedHouse("House of Wind");
+  // The houses above ship with an empty workspaceAllowlist. Under the effective
+  // rule an empty allowlist is "bounded by the registered projects", so register
+  // the parent directory as a project (fresh DB per test → no unique-dir clash)
+  // for the `[]` houses to resolve `tmpDir`.
+  createProject(getDb(), {
+    name: "Quest Project",
+    directory: tmpDir,
+    gitInfo: { branch: null, remote: null, dirty: false },
+  });
   const parent = createTask(getDb(), { title: "Quest", houseId: hl.id, workingDirectory: tmpDir });
   setTaskStatus(getDb(), parent.id, "running");
   return { hl, h1, h2, parent };
@@ -921,11 +932,12 @@ describe("budget, consolidation, cancel cascade, steering", () => {
     expect(prefs.plan?.abortedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
-  it("13 (M2): a sole subtask whose destination has an empty allowlist and no parent dir → deterministic abort, never a doomed child", async () => {
+  it("13 (M2): a sole subtask whose destination has an empty allowlist and no resolvable dir → deterministic abort, never a doomed child", async () => {
     // HL parent with NO workingDirectory + a sole active agent house with an
-    // EMPTY workspaceAllowlist → the child would inherit no usable dir and the
-    // queue would fail it at claim → retry → abort. M2 treats it as unresolvable
-    // at delegation time and aborts with a clear reason instead.
+    // EMPTY workspaceAllowlist and ZERO registered projects → the effective
+    // allowlist is empty, so no directory can anchor the child. The queue would
+    // fail it at claim → retry → abort; M2 treats it as unresolvable at
+    // delegation time and aborts with a clear reason instead.
     const hl = seedHighLordHouse(getDb())!;
     const h1 = seedHouse("House of Mist", []); // empty allowlist
     const parent = createTask(getDb(), { title: "Q", houseId: hl.id }); // no working dir
@@ -949,6 +961,69 @@ describe("budget, consolidation, cancel cascade, steering", () => {
     // No delegated child task row was created for the subtask.
     expect(subs.every((s) => s.taskId === null)).toBe(true);
     expect(eventsFor(parent.id).some((e) => e.payload.reason === "no_destination")).toBe(true);
+  });
+
+  it("14 (regression): empty destination allowlist + parent dir registered as a project → delegates a child in that dir, no abort", async () => {
+    // The observed High Lord failure: a `[]` destination house was delegated a
+    // child it could never run. Under the effective rule the registered project
+    // anchors the child, so delegation succeeds out of the box.
+    const hl = seedHighLordHouse(getDb())!;
+    const h1 = seedHouse("House of Mist", []); // empty allowlist
+    createProject(getDb(), {
+      name: "Quest Project",
+      directory: tmpDir,
+      gitInfo: { branch: null, remote: null, dirty: false },
+    });
+    const parent = createTask(getDb(), { title: "Q", houseId: hl.id, workingDirectory: tmpDir });
+    setTaskStatus(getDb(), parent.id, "running");
+
+    const { createSubtask } = await import("@/server/repositories/subtask-repo");
+    const { createHandoff } = await import("@/server/repositories/handoff-repo");
+    const s0 = createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+    createHandoff(getDb(), { parentTaskId: parent.id, subtaskId: s0.id, destinationHouseId: h1.id });
+
+    const deps = makeDeps();
+    await tickActivePlans(deps);
+
+    const p = getTask(getDb(), parent.id)!;
+    expect(p.status).toBe("running"); // no abort
+    expect((p.executionPreferences as any).plan?.abortReason).toBeUndefined();
+    const subs = listSubtasksForParent(getDb(), parent.id);
+    expect(subs[0].status).toBe("delegated");
+    const child = getTask(getDb(), subs[0].taskId!);
+    expect(child?.workingDirectory).toBe(tmpDir);
+    expect(eventsFor(parent.id).some((e) => e.payload.reason === "no_destination")).toBe(false);
+  });
+
+  it("15 (fail fast): empty destination allowlist + unregistered parent dir → no_destination with attemptCount 0 and an actionable message", async () => {
+    const hl = seedHighLordHouse(getDb())!;
+    const h1 = seedHouse("House of Mist", []); // empty allowlist
+    const unregistered = fs.mkdtempSync(path.join(os.tmpdir(), "velaris-orch-unreg-"));
+    const parent = createTask(getDb(), { title: "Q", houseId: hl.id, workingDirectory: unregistered });
+    setTaskStatus(getDb(), parent.id, "running");
+
+    const { createSubtask } = await import("@/server/repositories/subtask-repo");
+    const { createHandoff } = await import("@/server/repositories/handoff-repo");
+    const s0 = createSubtask(getDb(), { parentId: parent.id, planId: "s0", orderIndex: 0, dependsOn: [], title: "A" });
+    createHandoff(getDb(), { parentTaskId: parent.id, subtaskId: s0.id, destinationHouseId: h1.id });
+
+    const deps = makeDeps();
+    await tickActivePlans(deps);
+
+    const p = getTask(getDb(), parent.id)!;
+    expect(p.status).toBe("failed");
+    expect((p.executionPreferences as any).plan?.abortReason).toBe("no_destination");
+    const subs = listSubtasksForParent(getDb(), parent.id);
+    // No child was created → no retries burned.
+    expect(subs.every((s) => s.taskId === null)).toBe(true);
+    expect(subs.every((s) => s.attemptCount === 0)).toBe(true);
+    // Abort notification body is actionable (mentions registering / allowlist).
+    const failure = listNotifications(getDb(), { unreadOnly: false }).find(
+      (n) => n.title.startsWith("Plan aborted"),
+    );
+    expect(failure?.body).toContain("register the target directory as a project");
+    expect(failure?.body).toContain("workspace allowlist");
+    fs.rmSync(unregistered, { recursive: true, force: true });
   });
 });
 

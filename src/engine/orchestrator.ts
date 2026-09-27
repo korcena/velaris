@@ -33,6 +33,11 @@ import { OpencodeClient } from "@/server/opencode";
 import { executeTask } from "@/server/execution/runner";
 import { getTask, setTaskStatus, createTask, updateTask, writeTaskPlanAbortReason } from "@/server/repositories/task-repo";
 import { listHouses, findHighLordHouse } from "@/server/repositories/house-repo";
+import { isPathAllowed } from "@/lib/paths";
+import {
+  effectiveWorkspaceAllowlist,
+  projectDirectoryForTask,
+} from "@/server/repositories/workspace";
 import {
   createSubtask,
   listSubtasksForParent,
@@ -453,30 +458,38 @@ async function delegateReadySubtasks(
  * The Court sets a single `workingDirectory` on the parent, but each child runs
  * in its DESTINATION house's own workspace. Two independent subtasks delegated
  * to two distinct houses with distinct workspaces MUST run concurrently; they
- * serialize only when they resolve to the SAME directory. The parent's
- * `workingDirectory` is used only when the child's destination house has no
- * workspace allowlist of its own (i.e. it genuinely executes in the parent dir).
+ * serialize only when they resolve to the SAME directory. When the destination
+ * house has a non-empty allowlist its first entry is used (unchanged). Otherwise
+ * — an empty allowlist, bounded by the project registry — the child runs in the
+ * parent's `workingDirectory`, falling back to the parent's registered project
+ * directory (never an arbitrary dir).
  */
 function childExecutionDir(deps: OrchestratorDeps, parent: TaskDto, subtask: SubtaskDto): string {
   const dest = destinationForSubtask(deps, subtask);
   const destWorkspace = dest?.configuration.workspaceAllowlist?.[0];
   if (destWorkspace) return destWorkspace;
-  return parent.workingDirectory ?? "";
+  return parent.workingDirectory ?? projectDirectoryForTask(deps.db, parent) ?? "";
 }
 
 /**
- * Whether a destination house has a usable workspace to delegate into. A child
- * task whose destination has an empty allowlist can never pass the queue's
- * resolveWorkspace at claim time (it would fail → retry → abort), so it is
- * treated as unresolvable at delegation time. Mirrors the queue's `resolveWorkspace`
- * rule: no allowlist → execution is blocked (unless the parent provides a dir).
+ * Whether a destination house has a usable workspace to delegate into, using
+ * the SAME effective-allowlist rule the queue's `resolveWorkspace` applies:
+ *  - non-empty destination allowlist → usable (unchanged);
+ *  - empty destination allowlist → usable iff the child resolves to a directory
+ *    (`D` = parent `workingDirectory` ?? parent's registered project directory)
+ *    that is inside the effective allowlist (the registered-project dirs).
+ *    Zero projects → false.
+ *
+ * A destination with no usable workspace can never pass the queue at claim time,
+ * so the caller treats it as unresolvable and aborts with `no_destination`
+ * BEFORE creating a doomed child (no retries).
  */
 function destinationHasUsableWorkspace(deps: OrchestratorDeps, parent: TaskDto, dest: HouseDto): boolean {
   // A destination with its own allowlist entry is always usable.
   if (dest.configuration.workspaceAllowlist.length > 0) return true;
-  // Otherwise the child would inherit the parent's workingDirectory; that is
-  // only usable if the parent actually carries one.
-  return Boolean(parent.workingDirectory);
+  const effective = effectiveWorkspaceAllowlist(deps.db, dest.configuration);
+  const dir = parent.workingDirectory ?? projectDirectoryForTask(deps.db, parent);
+  return dir !== null && isPathAllowed(dir, effective);
 }
 
 /** Create the child task row + link; returns the child task or null (no dest). */
@@ -997,6 +1010,8 @@ function describeAbortReason(reason: string): string {
       return "A subtask failed 3 times — the plan collapsed.";
     case "token_budget_exceeded":
       return "The token treasury ran dry — the plan was aborted.";
+    case "no_destination":
+      return "No house can run this subtask: register the target directory as a project, or set a workspace allowlist on the destination house.";
     default:
       return `Plan aborted (${reason}).`;
   }

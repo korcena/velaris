@@ -33,6 +33,13 @@
  *   model may write outside the sandbox. The caller (runtime) decides whether to
  *   gate an out-of-allowlist write as `ask` vs `deny` based on the policy; we
  *   always surface it as `ask` so the human can refuse.
+ *
+ * This module is a PURE gate: it receives `pathInsideAllowlist` and never reads
+ * a configuration allowlist itself. The runtime computes that flag against the
+ * EFFECTIVE workspace allowlist (`effectiveWorkspaceAllowlist(db, configuration)`
+ * in `src/server/repositories/workspace.ts`) — a house's non-empty
+ * `workspaceAllowlist` verbatim, otherwise the registered project directories —
+ * so the gate agrees with the queue's `resolveWorkspace` and the orchestrator.
  */
 
 import type { Permissions } from "@/shared/types";
