@@ -78,6 +78,13 @@
       "when": 1790467359492,
       "tag": "0010_archives_fts",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1790470911200,
+      "tag": "0011_archives_fts_incremental",
+      "breakpoints": true
     }
   ]
 }

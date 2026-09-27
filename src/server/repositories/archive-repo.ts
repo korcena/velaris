@@ -2,18 +2,24 @@
  * Archive repository (Phase 6 Stage D) — read-only searchable history over
  * terminal tasks.
  *
- * Q5 decision: `LIKE` + indexes over existing tables for 6.1. Phase 6.2 Stage S2
- * adds an additive FTS5 index (`archives_fts`, migration 0010) aggregating task,
- * artifact and agent-message text. It is used **automatically when present** for
- * the text `q` filter and kept in sync by triggers; when the index is missing
- * (an unmigrated DB) or a query cannot be represented faithfully by FTS
- * tokenisation, the original `LIKE` path remains the fallback. There is still no
- * repository writer — the engine's single-writer discipline is untouched.
+ * Q5 decision: `LIKE` + indexes over existing tables is the semantic floor and
+ * remains the default/fallback. Phase 6.2 Stage S2 adds an additive FTS5 index
+ * (`archives_fts`, migrations 0010 + 0011) over task title/description and
+ * artifact text. When the index exists it is used **automatically and
+ * ADDITIVELY** for the text `q` filter: the FTS branch is OR'd with the original
+ * 4-way `LIKE` branch, never substituted for it. That matters because FTS
+ * phrase-quoting matches whole tokens (no prefix/substring, and tokens can be
+ * split across fields), so an FTS-only `q` would silently NARROW the public
+ * "search titles, descriptions, results…" behaviour. With the OR, every `LIKE`
+ * hit still matches and FTS only widens recall.
  *
- * Text matches task `title`/`description` plus artifact/agent-message content
- * for the task's sessions. `q` is escaped so `%`, `_` and the escape character
- * itself are treated literally (a user searching "100%" must not match
- * everything).
+ * Messages are NOT indexed in FTS (migration 0011 removed the O(history)
+ * `group_concat` triggers — see 0011): they are covered by the `LIKE` floor,
+ * which is always present. There is still no repository writer — the engine's
+ * single-writer discipline is untouched.
+ *
+ * `q` is escaped so `%`, `_` and the escape character itself are treated
+ * literally (a user searching "100%" must not match everything).
  */
 
 import type Database from "better-sqlite3";
@@ -134,21 +140,13 @@ function buildWhere(query: ArchiveQuery, raw: Database.Database): { sql: string;
     params.push(query.to);
   }
   if (query.q) {
-    // Automatic-if-present: use the additive FTS index when it exists. Queries
-    // containing `%`, `_` or `\` fall back to LIKE because the FTS `unicode61`
-    // tokenizer treats those as separators and cannot reproduce LIKE's literal
-    // wildcard semantics (e.g. a literal "50%" or "_" query).
-    const fts = hasArchiveFts(raw) && !/[\\%_]/.test(query.q) ? sanitizeFtsQuery(query.q) : "";
-    if (fts) {
-      clauses.push(
-        "EXISTS (SELECT 1 FROM archives_fts f WHERE f.task_id = t.id AND archives_fts MATCH ?)",
-      );
-      params.push(fts);
-    } else {
-      // LIKE fallback (index absent or tokenisation would lose punctuation).
-      const like = `%${escapeLike(query.q)}%`;
-      clauses.push(
-        `(t.title LIKE ? ESCAPE '\\'
+    // The ORIGINAL `LIKE` branch is ALWAYS included for `q`: it is the semantic
+    // floor (substring/prefix semantics the UI promises). FTS, when present, is
+    // OR'd in ADDITIVELY to widen recall — it is never substituted for LIKE,
+    // because FTS phrase-quoting matches whole tokens only and would silently
+    // drop `Ques`/`uest`-style and cross-field matches that LIKE finds.
+    const like = `%${escapeLike(query.q)}%`;
+    const likeClause = `(t.title LIKE ? ESCAPE '\\'
           OR t.description LIKE ? ESCAPE '\\'
           OR EXISTS (
             SELECT 1 FROM artifacts a
@@ -158,8 +156,22 @@ function buildWhere(query: ArchiveQuery, raw: Database.Database): { sql: string;
             SELECT 1 FROM agent_messages am
               JOIN execution_sessions s2 ON s2.id = am.session_id
              WHERE s2.task_id = t.id AND am.content LIKE ? ESCAPE '\\'
-          ))`,
+          ))`;
+
+    // Automatic-if-present: widen with the additive FTS index when it exists.
+    // Queries containing `%`, `_` or `\` skip the FTS branch (the `unicode61`
+    // tokenizer treats those as separators and cannot reproduce LIKE's literal
+    // wildcard semantics, e.g. a literal "50%"); the LIKE branch still runs, so
+    // these are never lost.
+    const fts = hasArchiveFts(raw) && !/[\\%_]/.test(query.q) ? sanitizeFtsQuery(query.q) : "";
+    if (fts) {
+      clauses.push(
+        `((${likeClause}) OR EXISTS (SELECT 1 FROM archives_fts f WHERE f.task_id = t.id AND archives_fts MATCH ?))`,
       );
+      params.push(like, like, like, like, fts);
+    } else {
+      // LIKE-only path (index absent or FTS tokenisation would lose punctuation).
+      clauses.push(likeClause);
       params.push(like, like, like, like);
     }
   }

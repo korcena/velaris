@@ -231,10 +231,12 @@ export class TaskQueue {
       if (!resolvedDir) return;
 
       // Phase 6.2 Stage S1.4/S1.5 — OpenCode worktree isolation (default OFF).
-      // When the flag is OFF the only added work is one indexed
-      // `provider_configs` read (`getWorktreeIsolationEnabled`); the path below
-      // is otherwise byte-identical to the pre-S1 engine. The precise guarantee
-      // is: no worktree client call, no worktree event, no session change.
+      // For every OpenCode run the flag check below costs one un-indexed
+      // `provider_configs` SELECT (`getWorktreeIsolationEnabled`); the `&&`
+      // short-circuit means Ollama runs skip it entirely. When the flag is OFF
+      // the rest of the path is otherwise byte-identical to the pre-S1 engine.
+      // The precise guarantee is: no worktree client call, no worktree event,
+      // no session change.
       // When ON + OpenCode:
       //   1. `resolvedDir` above already validated the ORIGINAL task repo against
       //      the house allowlist ALONE (a task can never point at an arbitrary

@@ -288,8 +288,9 @@ describe("archives FTS5 index (automatic-if-present, LIKE fallback)", () => {
   });
 
   it("with FTS present, artifact and message text still match with the same totals", () => {
-    // These two assertions are the regression proof: FTS aggregates artifact
-    // and message text for the task, so the golden searches are unchanged.
+    // Artifact text is indexed by FTS; message text is NOT (0011 dropped the
+    // O(history) message triggers) but stays covered by the LIKE floor that is
+    // always OR'd into the q clause. Either way the public totals are unchanged.
     const artifact = search({ q: "RESULT-MARKER-55", limit: 100 });
     expect(artifact.total).toBe(1);
     expect(artifact.entries[0].taskId).toBe("task-55");
@@ -303,13 +304,64 @@ describe("archives FTS5 index (automatic-if-present, LIKE fallback)", () => {
     expect(search({ q: "Quest 10 ", limit: 10 }).entries[0].taskId).toBe("task-10");
   });
 
+  it("FTS is ADDITIVE: prefix/substring queries return a superset of the LIKE-only path", () => {
+    // Regression proof for the narrowing bug: FTS phrase-quoting matches whole
+    // tokens, so an FTS-only q would drop `Ques` (prefix) and `uest` (substring)
+    // even though LIKE finds all 120 titles. With FTS present the results must
+    // therefore be a SUPERSET of — and, ideally, identical to — LIKE-only.
+    const ftsPrefix = search({ q: "Ques", limit: 200 });
+    const ftsSubstring = search({ q: "uest", limit: 200 });
+
+    // Drop the virtual index to measure the LIKE-only baseline for the same
+    // query text.
+    const raw = getRawDb();
+    raw.exec("DROP TABLE archives_fts");
+    expect(hasArchiveFts(raw)).toBe(false);
+    const likePrefix = search({ q: "Ques", limit: 200 });
+    const likeSubstring = search({ q: "uest", limit: 200 });
+
+    expect(likePrefix.total).toBe(SESSION_COUNT); // every title starts "Quest"
+    expect(likeSubstring.total).toBe(SESSION_COUNT);
+    // Superset property: no LIKE hit is lost when FTS is present.
+    expect(ftsPrefix.total).toBeGreaterThanOrEqual(likePrefix.total);
+    expect(ftsSubstring.total).toBeGreaterThanOrEqual(likeSubstring.total);
+    // In this dataset FTS adds no extra prefix/substring recall, so they match.
+    expect(ftsPrefix.total).toBe(likePrefix.total);
+    expect(ftsSubstring.total).toBe(likeSubstring.total);
+    const ftsIds = new Set(ftsSubstring.entries.map((e) => e.taskId));
+    expect(likeSubstring.entries.every((e) => ftsIds.has(e.taskId))).toBe(true);
+  });
+
+  it("cross-field FTS recall does not narrow the LIKE results (superset, not substring-false-positive)", () => {
+    // FTS tokenisation can match tokens spread across fields ("needle" and "42"),
+    // which the literal LIKE "needle 42" does not. That is accepted widening —
+    // but it must not REMOVE the LIKE floor or the semantics regress.
+    const fts = search({ q: "needle 42", limit: 200 });
+
+    const raw = getRawDb();
+    raw.exec("DROP TABLE archives_fts");
+    const like = search({ q: "needle 42", limit: 200 });
+    expect(like.total).toBe(0); // "needle-42" is hyphenated, not "needle 42"
+
+    expect(fts.total).toBeGreaterThanOrEqual(like.total);
+    // The FTS branch widens recall: task-42's description holds both tokens.
+    expect(fts.entries.some((e) => e.taskId === "task-42")).toBe(true);
+  });
+
   it("does not throw on FTS-hostile user input (quotes, operators, wildcards)", () => {
     for (const q of ['"', '""', "*", "-", "OR", "NEAR", "(", ")", '"*', 'a"b', "%", "_", "\\"]) {
-      expect(() => search({ q, limit: 100 })).not.toThrow();
-      // A lone quote / operator must not match everything.
-      expect(search({ q, limit: 100 }).total).toBe(0);
+      // Safety requirement: hostile MATCH syntax must return normally, never
+      // throw a 500. Totals are no longer forced to 0 — the LIKE floor is always
+      // OR'd in, and e.g. "-" legitimately matches the golden descriptions
+      // ("needle-<i>-end") via LIKE.
+      expect(() => search({ q, limit: 200 })).not.toThrow();
+      expect(typeof search({ q, limit: 200 }).total).toBe("number");
     }
-    expect(() => search({ q: '  "  *  -  ', limit: 100 })).not.toThrow();
+    // The wildcard-literal queries that skip FTS still match nothing here.
+    expect(search({ q: "%", limit: 200 }).total).toBe(0);
+    expect(search({ q: "_", limit: 200 }).total).toBe(0);
+    expect(search({ q: "\\", limit: 200 }).total).toBe(0);
+    expect(() => search({ q: '  "  *  -  ', limit: 200 })).not.toThrow();
   });
 
   it("falls back to LIKE when the FTS table is absent", () => {
@@ -345,6 +397,45 @@ describe("archives FTS5 index (automatic-if-present, LIKE fallback)", () => {
     raw.prepare("UPDATE tasks SET title = 'discount 50% off' WHERE id = 'task-2'").run();
     expect(search({ q: "50%", limit: 100 }).total).toBe(1);
     expect(search({ q: "50%zzz", limit: 100 }).total).toBe(0);
+  });
+
+  it("message ingestion no longer recomputes FTS: cost is independent of message history", () => {
+    // Regression guard for the O(n²) hot path. Migration 0011 dropped the
+    // agent_messages triggers, so inserting a message never touches archives_fts.
+    // We prove both structurally (no message triggers) and behaviourally (the
+    // per-insert cost with a large history is within a small factor of empty).
+    const raw = getRawDb();
+
+    const messageTriggers = (
+      raw
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'archives_fts_agent_messages%'",
+        )
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    expect(messageTriggers).toEqual([]);
+
+    const insert = raw.prepare(
+      `INSERT INTO agent_messages (id, session_id, role, content, provider_message_id)
+       VALUES (?, ?, 'agent', ?, ?)`,
+    );
+    // Warm up, then time 100 inserts on a session with no history.
+    for (let i = 0; i < 50; i++) insert.run(`warm-${i}`, "sess-1", "x", `warm-${i}`);
+    const empty = performance.now();
+    for (let i = 0; i < 100; i++) insert.run(`empty-${i}`, "sess-1", "hello", `empty-${i}`);
+    const emptyMs = performance.now() - empty;
+
+    // Seed 3,000 messages (the 0010 triggers made each subsequent insert
+    // re-aggregate all of them).
+    for (let i = 0; i < 3000; i++) insert.run(`seed-${i}`, "sess-1", "hello", `seed-${i}`);
+    const deep = performance.now();
+    for (let i = 0; i < 100; i++) insert.run(`deep-${i}`, "sess-1", "hello", `deep-${i}`);
+    const deepMs = performance.now() - deep;
+
+    // Generous bound: without group_concat the two are within ~20x (typically
+    // <2x); the old O(n) recompute was hundreds of times slower. This is a
+    // perf-style assertion, intentionally loose for CI variance.
+    expect(deepMs).toBeLessThan(Math.max(50, emptyMs * 20 + 25));
   });
 });
 

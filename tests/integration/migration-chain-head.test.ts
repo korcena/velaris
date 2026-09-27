@@ -472,14 +472,18 @@ describe("full migration chain from the Phase 1 schema head", () => {
       ).c,
     ).toBe(1);
 
-    // Every source table has INSERT/UPDATE/DELETE sync triggers.
+    // Every ARTIFACT source table keeps its INSERT/UPDATE/DELETE sync triggers.
     const triggers = (
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'archives_fts_%'")
         .all() as Array<{ name: string }>
     ).map((r) => r.name);
-    for (const suffix of ["tasks_ai", "tasks_au", "tasks_ad", "artifacts_ai", "artifacts_au", "artifacts_ad", "agent_messages_ai", "agent_messages_au", "agent_messages_ad"]) {
+    for (const suffix of ["tasks_ai", "tasks_au", "tasks_ad", "artifacts_ai", "artifacts_au", "artifacts_ad"]) {
       expect(triggers).toContain(`archives_fts_${suffix}`);
+    }
+    // 0011 removed the O(history) agent_messages triggers from the index.
+    for (const suffix of ["agent_messages_ai", "agent_messages_au", "agent_messages_ad"]) {
+      expect(triggers).not.toContain(`archives_fts_${suffix}`);
     }
 
     // The pre-existing Phase-1 task was backfilled at migration time.
@@ -500,6 +504,82 @@ describe("full migration chain from the Phase 1 schema head", () => {
       .get() as { artifact_text: string };
     expect(row.artifact_text).toContain("FTS-SYNC-PROOF");
 
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
+
+  it("the 0011 migration is a documented virtual-table recreate (no real-table DROP, no PRAGMA)", () => {
+    const sql = fs.readFileSync(
+      path.join(DRIZZLE_DIR, "0011_archives_fts_incremental.sql"),
+      "utf8",
+    );
+    // Strip SQL line comments so the header's prose does not satisfy/defeat the
+    // DDL assertions below.
+    const ddl = sql.replace(/--[^\n]*/g, "");
+    expect(ddl).not.toMatch(/PRAGMA/i);
+    expect(ddl).not.toMatch(/ALTER\s+TABLE/i);
+    expect(ddl).not.toMatch(/CREATE\s+TABLE/i);
+    expect(ddl).toMatch(/DROP TABLE IF EXISTS archives_fts;/i);
+    expect(ddl).toMatch(/CREATE VIRTUAL TABLE archives_fts USING fts5/i);
+    expect(ddl).toMatch(/tokenize='unicode61'/i);
+    // Additive-safety: every DROP is the FTS virtual table or one of its own
+    // triggers — never a REAL table.
+    const drops = Array.from(
+      ddl.matchAll(/DROP\s+(TABLE|TRIGGER)\s+IF\s+EXISTS\s+([A-Za-z0-9_]+)/gi),
+      (m) => `${m[1].toUpperCase()} ${m[2]}`,
+    );
+    expect(drops.length).toBeGreaterThan(0);
+    for (const d of drops) {
+      expect(d).toMatch(/^(TABLE archives_fts|TRIGGER archives_fts_)/);
+    }
+    // No agent_messages triggers are recreated; tasks/artifacts ones are.
+    expect(ddl).not.toMatch(/ON agent_messages\b/i);
+    for (const t of ["tasks", "artifacts"]) {
+      expect(ddl).toMatch(new RegExp(`AFTER (INSERT|UPDATE|DELETE) ON ${t}\\b`, "i"));
+    }
+  });
+
+  it("0011 recreates archives_fts in the new shape, drops message triggers, backfills FK-clean", () => {
+    const db = new Database(dbPath);
+    // The virtual table survived the recreate with the expected columns.
+    const cols = (db.prepare("PRAGMA table_info(archives_fts)").all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+    expect(cols).toEqual(["task_id", "title", "description", "artifact_text"]);
+    // No message triggers remain; tasks + artifacts triggers do.
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'archives_fts_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    expect(triggers.some((n) => n.includes("agent_messages"))).toBe(false);
+    expect(triggers).toContain("archives_fts_tasks_ai");
+    expect(triggers).toContain("archives_fts_artifacts_ai");
+
+    // The pre-existing task was re-backfilled with its title/description.
+    const backfilled = db
+      .prepare("SELECT task_id, title, artifact_text FROM archives_fts WHERE task_id = 't1'")
+      .get() as { task_id: string; title: string; artifact_text: string } | undefined;
+    expect(backfilled?.task_id).toBe("t1");
+    expect(backfilled?.title).toBe("Phase One Task");
+
+    // Artifact text is still indexed (tasks/artifacts triggers survived).
+    db.prepare(
+      "INSERT INTO artifacts (id, session_id, task_id, kind, content) VALUES ('ar-0011','s-fts','t1','result','FTS-0011-PROOF')",
+    ).run();
+    const synced = db
+      .prepare("SELECT artifact_text FROM archives_fts WHERE task_id = 't1'")
+      .get() as { artifact_text: string };
+    expect(synced.artifact_text).toContain("FTS-0011-PROOF");
+
+    // Messages are NOT indexed: inserting one must not add/alter a task row.
+    const before = (
+      db.prepare("SELECT COUNT(*) c FROM archives_fts").get() as { c: number }
+    ).c;
+    db.prepare(
+      "INSERT INTO agent_messages (id, session_id, role, content) VALUES ('m-0011','s-fts','user','MESSAGE-0011-PROOF')",
+    ).run();
+    expect((db.prepare("SELECT COUNT(*) c FROM archives_fts").get() as { c: number }).c).toBe(before);
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });

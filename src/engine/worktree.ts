@@ -16,8 +16,13 @@
  * against the house allowlist alone, so enabling worktree mode never widens
  * where a task can point.
  *
- * Everything here is flag-gated and OpenCode-only; when the flag is OFF no
- * function in this module reaches the OpenCode client.
+ * Everything here is flag-gated and OpenCode-only. `resolveWorktree` and the
+ * sweep's client calls never run when the flag is OFF, but `cleanupWorktree`
+ * and `sweepWorktrees` are called unconditionally by the queue/boot — they are
+ * given a client regardless and rely on their own guards (no directory; and the
+ * flag check inside `runSweep`). The precise flag-OFF guarantee is: no worktree
+ * is created, no session worktree mapping is written, and no worktree event is
+ * emitted.
  */
 
 import fs from "node:fs";

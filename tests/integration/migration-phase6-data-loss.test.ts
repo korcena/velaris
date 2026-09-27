@@ -302,13 +302,12 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
       ).c,
     ).toBe(1);
 
-    // The pre-existing task (with its artifact + message) was backfilled.
+    // The pre-existing task was backfilled.
     const indexed = db
       .prepare("SELECT task_id, title, artifact_text FROM archives_fts WHERE task_id = 'task-p6'")
       .get() as { task_id: string; title: string; artifact_text: string } | undefined;
     expect(indexed).toBeTruthy();
     expect(indexed!.title).toBe("Phase 6 survivor");
-    expect(indexed!.artifact_text).toContain("precious phase 6 data");
 
     // Source rows all survive (nothing was consumed or rebuilt).
     const survivors = {
@@ -322,7 +321,50 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     db.close();
   });
 
-  it("0010 second migrate is idempotent — FTS rows and sources are unchanged", () => {
+  it("0011 recreates the FTS virtual table without message triggers and preserves source rows", () => {
+    if (!upgraded) return;
+    const db = new Database(upgradePath);
+    db.pragma("foreign_keys = ON");
+
+    // 0011's shape: same columns, artifact-only indexing, no message triggers.
+    const cols = (db.prepare("PRAGMA table_info(archives_fts)").all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+    expect(cols).toEqual(["task_id", "title", "description", "artifact_text"]);
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'archives_fts_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    expect(triggers).toContain("archives_fts_tasks_ai");
+    expect(triggers).toContain("archives_fts_artifacts_ad");
+    expect(triggers.some((n) => n.includes("agent_messages"))).toBe(false);
+
+    // The pre-existing task survived the virtual-table recreate and was
+    // re-backfilled with its artifact text.
+    const indexed = db
+      .prepare("SELECT task_id, title, artifact_text FROM archives_fts WHERE task_id = 'task-p6'")
+      .get() as { task_id: string; title: string; artifact_text: string } | undefined;
+    expect(indexed?.title).toBe("Phase 6 survivor");
+    expect(indexed?.artifact_text).toContain("x");
+
+    // Message content is no longer part of FTS (covered by the LIKE floor).
+    db.prepare(
+      "INSERT INTO agent_messages (id,session_id,role,content) VALUES ('msg-0011','sess-p6','user','MESSAGE-0011-ONLY')",
+    ).run();
+    const after = db
+      .prepare("SELECT artifact_text FROM archives_fts WHERE task_id = 'task-p6'")
+      .get() as { artifact_text: string };
+    expect(after.artifact_text).not.toContain("MESSAGE-0011-ONLY");
+
+    // All source rows survive.
+    expect(count(db, "agent_messages", "id='msg-p6'")).toBe(1);
+    expect(count(db, "artifacts", "id='art-p6'")).toBe(1);
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
+
+  it("0010/0011 second migrate is idempotent — FTS rows and sources are unchanged", () => {
     if (!upgraded) return;
     const ftsBefore = (() => {
       const db = new Database(upgradePath, { readonly: true });
@@ -334,7 +376,7 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     resetDbForTests();
     const db = new Database(upgradePath);
     expect(count(db, "tasks", "id='task-p6'")).toBe(1);
-    // A second migrate does not re-run the backfill (the journal records 0010
+    // A second migrate does not re-run the backfill (the journal records 0011
     // as applied); the row count is unchanged.
     expect((db.prepare("SELECT COUNT(*) c FROM archives_fts").get() as { c: number }).c).toBe(ftsBefore);
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
