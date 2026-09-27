@@ -46,9 +46,9 @@ export default function SettingsPage() {
   // Appearance
   const [reducedMotion, setReducedMotion] = useState(false);
 
-  // Phase 5 pricing editor + worktree flag (Q5/Q7). Worktree isolation is an
-  // INERT scaffold that defaults OFF; the flag just opts into the (unverified)
-  // OpenCode /experimental/worktree method on the OpenCode client.
+  // Phase 5 pricing editor + Phase 6.2 worktree flag. Worktree isolation is
+  // wired into the engine (default OFF): when ON, OpenCode runs execute in a
+  // git worktree and the OpenCode worktree root is added to the run allowlist.
   const [pricingRows, setPricingRows] = useState<Array<{ modelId: string; inputPer1M: string; outputPer1M: string }>>([]);
   const [pricingLoaded, setPricingLoaded] = useState(false);
   const [worktreeIsolation, setWorktreeIsolation] = useState(false);
@@ -451,14 +451,15 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Phase 5 — Experimental worktree isolation (Stage I, Q7: inert scaffold, default OFF) */}
+      {/* Phase 6.2 Stage S1 — experimental worktree isolation (default OFF) */}
       <Card>
         <CardHeader>
           <CardTitle className="font-serif-display text-xl">Experimental — Worktree</CardTitle>
           <CardDescription>
-            OpenCode-only experimental worktree isolation. Off by default. This is an inert scaffold:
-            it surfaces the OpenCode /experimental/worktree toggle but makes no claim that live
-            isolation is verified (requires a live OpenCode server).
+            OpenCode-only worktree isolation. Off by default. When enabled, each OpenCode run is
+            isolated in its own fresh git worktree (a prior worktree is never reused) under the
+            OpenCode worktree root, and that root is added to the run allowlist (the task&apos;s own
+            directory must still pass the house allowlist). Ollama runs are never isolated.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -466,8 +467,10 @@ export default function SettingsPage() {
             <div>
               <p className="font-medium text-foreground">Worktree isolation</p>
               <p className="text-xs text-muted-foreground">
-                When off (default) no code path touches the experimental endpoint; enabling it opts
-                into an unverified scaffold.
+                When off (default) no code path touches the experimental endpoint. When on, each
+                OpenCode run executes in its own disposable git worktree. Removal is best-effort and
+                only on successful completion — failed runs&apos; worktrees are kept for inspection,
+                and any leftovers are reclaimed by the boot sweep.
               </p>
             </div>
             <Switch

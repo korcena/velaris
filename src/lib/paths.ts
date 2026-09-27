@@ -11,10 +11,39 @@
 
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 
 /** Ensure a path is absolute; if not, resolve it against cwd. */
 export function toAbsolute(candidate: string): string {
   return path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+}
+
+/**
+ * The single OpenCode-owned worktree root
+ * (`${XDG_DATA_HOME ?? ~/.local/share}/opencode/worktree`).
+ *
+ * Phase 6.2 Stage S1: this location is the ONE documented exception to the
+ * house workspace allowlist. When `experimental.worktreeIsolation` is ON and the
+ * routed provider is OpenCode, the final RUN directory may additionally sit
+ * under this root. The ORIGINAL task repo directory is still validated against
+ * the house allowlist alone, so the exception never lets a task point anywhere
+ * it could not already point.
+ *
+ * Returns the realpath'd root when it already exists (so a symlinked data dir
+ * compares consistently with `resolveSafePath`), otherwise the unresolved path
+ * (`resolveSafePath` filters non-existent allowlist entries anyway).
+ */
+export function worktreeRoot(): string {
+  const base =
+    process.env.XDG_DATA_HOME && process.env.XDG_DATA_HOME.length > 0
+      ? process.env.XDG_DATA_HOME
+      : path.join(os.homedir(), ".local", "share");
+  const candidate = path.join(base, "opencode", "worktree");
+  try {
+    return fs.realpathSync(candidate);
+  } catch {
+    return candidate;
+  }
 }
 
 /**

@@ -26,7 +26,9 @@ import {
   setTaskStatus,
 } from "@/server/repositories/task-repo";
 import { createExecutionEvent, getActiveSessionForHouse } from "@/server/repositories/execution-repo";
-import { resolveSafePath, isPathAllowed } from "@/lib/paths";
+import { resolveSafePath, isPathAllowed, worktreeRoot } from "@/lib/paths";
+import { getWorktreeIsolationEnabled } from "@/server/repositories/provider-config-repo";
+import { cleanupWorktree, resolveWorktree, type ResolvedWorktree } from "./worktree";
 import { runParent, tickActivePlans } from "./orchestrator";
 import type { OrchestratorDeps } from "./orchestrator";
 import { providerHealth, resolveProviderKindForAgent } from "./provider-factory";
@@ -215,16 +217,63 @@ export class TaskQueue {
       const runtimeAgent = task.agentId ? resolveRuntimeAgent(db, house.id, task) : null;
       const runtimeConfig = runtimeAgent?.configuration ?? house.configuration;
       const runtimeAgentId = runtimeAgent?.id ?? null;
+      const provider: ProviderKind = runtimeConfig.executionProvider;
 
       const resolvedDir = this.resolveWorkspace(db, task, house, runtimeConfig);
       if (!resolvedDir) return;
 
-      this.deps.log(`[queue] running task ${task.title} for house ${house.name} in ${resolvedDir}`);
+      // Phase 6.2 Stage S1.4/S1.5 — OpenCode worktree isolation (default OFF).
+      // When the flag is OFF the only added work is one indexed
+      // `provider_configs` read (`getWorktreeIsolationEnabled`); the path below
+      // is otherwise byte-identical to the pre-S1 engine. The precise guarantee
+      // is: no worktree client call, no worktree event, no session change.
+      // When ON + OpenCode:
+      //   1. `resolvedDir` above already validated the ORIGINAL task repo against
+      //      the house allowlist ALONE (a task can never point at an arbitrary
+      //      dir just because worktree mode is on).
+      //   2. `resolveWorktree` ALWAYS creates a fresh worktree (Q3: a prior
+      //      worktree is never reused — it may be dirty or belong to a different
+      //      source repo after a task edit) bound to that source repo.
+      //   3. The worktree dir is validated against the ONE documented exception:
+      //      the house allowlist augmented with `worktreeRoot()` — and nothing
+      //      else.
+      // Any failure falls back to the normal resolved dir and emits an error
+      // event; isolation is best-effort and must never fail the task.
+      let runDirectory = resolvedDir;
+      let worktree: ResolvedWorktree | null = null;
+      const worktreeEnabled = provider === "opencode" && getWorktreeIsolationEnabled(raw);
+      if (worktreeEnabled) {
+        try {
+          worktree = await resolveWorktree({
+            client,
+            task,
+            sourceDirectory: resolvedDir,
+            houseAllowlist: runtimeConfig.workspaceAllowlist,
+          });
+          // Validate the final run dir against the augmented allowlist (S1.5).
+          resolveSafePath(worktree.directory, [...runtimeConfig.workspaceAllowlist, worktreeRoot()]);
+          runDirectory = worktree.directory;
+          this.deps.log(`[queue] task ${task.title} isolated in worktree ${worktree.directory}`);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          this.deps.log(`[queue] task ${task.title}: worktree isolation unavailable — using the resolved directory ${resolvedDir}: ${detail}`);
+          createExecutionEvent(db, {
+            taskId: task.id,
+            houseId: house.id,
+            rawType: "error",
+            type: "error",
+            payload: { error: "worktree isolation unavailable", detail },
+          });
+          worktree = null;
+          runDirectory = resolvedDir;
+        }
+      }
+
+      this.deps.log(`[queue] running task ${task.title} for house ${house.name} in ${runDirectory}`);
 
       // Provider dispatch: OpenCode routes through the existing runner; Ollama
       // routes to the native tool-loop runtime (Stage F). The OpenCode branch
       // here is byte-identical to the pre-seam code.
-      const provider: ProviderKind = runtimeConfig.executionProvider;
       if (provider === "ollama") {
         if (!this.deps.ollamaClient) {
           this.deps.log(`[queue] task ${task.title} for house ${house.name}: no Ollama client configured`);
@@ -267,12 +316,31 @@ export class TaskQueue {
           house,
           agent: runtimeAgent,
           agentId: runtimeAgentId,
-          directory: resolvedDir,
+          directory: runDirectory,
           modelId: runtimeConfig.modelId,
+          worktreeDirectory: worktree?.directory ?? null,
+          worktreeBranch: worktree?.branch ?? null,
         },
         { signal },
       );
       this.deps.log(`[queue] task ${task.title} → ${result.terminalStatus}`);
+
+      // Terminal worktree cleanup (Q3). Chosen seam: the queue, right after the
+      // runner has returned AND persisted the terminal session/task state. The
+      // runner's `onTerminal` callback is synchronous and fires inside
+      // `persistTerminalNow`, so it cannot await the provider calls; the queue
+      // owns the client and the awaited result. Cleanup is best-effort: it logs
+      // and swallows, and can never change the runner result.
+      if (worktree) {
+        await cleanupWorktree({
+          db,
+          client,
+          sessionId: result.sessionId,
+          directory: worktree.directory,
+          terminalStatus: result.terminalStatus,
+          log: this.deps.log,
+        });
+      }
     } catch (err) {
       this.deps.log(`[queue] task ${task.title} errored: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -280,9 +348,15 @@ export class TaskQueue {
     }
   }
 
-  /** Resolve + validate the working directory against the ROUTED agent's
-   * allowlist (defaults to the house configuration for single-agent houses).
-   * Returns the real path, or null (with the task set to a state indicating block).
+  /** Resolve + validate the ORIGINAL task working directory against the ROUTED
+   * agent's allowlist (defaults to the house configuration for single-agent
+   * houses). Returns the real path, or null (with the task set to a state
+   * indicating block).
+   *
+   * Phase 6.2 Stage S1.5: this validates the SOURCE repo only. When worktree
+   * isolation is ON the worktree directory (under OpenCode's `worktreeRoot()`)
+   * is validated separately against `[...allowlist, worktreeRoot()]`; that single
+   * root is the ONE documented allowlist exception and never appears here.
    */
   private resolveWorkspace(
     db: VelarisDb,

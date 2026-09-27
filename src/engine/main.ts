@@ -29,6 +29,7 @@ import { OllamaClient } from "@/server/execution/ollama/client";
 import { createOpenCodeAdapter } from "@/server/execution/opencode/provider";
 import { OpenCodeServerManager } from "./opencode-server";
 import { reconcile } from "./reconcile";
+import { sweepWorktrees } from "./worktree";
 import { TaskQueue } from "./queue";
 
 const HEARTBEAT_INTERVAL_MS = 10_000; // log cadence
@@ -89,7 +90,9 @@ async function main(): Promise<void> {
   console.log("[velaris-engine] reconciling orphaned execution state…");
   await reconcile(db, raw, client, log);
 
-  // 5. OpenCode server lifecycle manager (probe → adopt → spawn).
+  // 5. OpenCode server lifecycle manager (probe → adopt → spawn). Must run
+  //    BEFORE the worktree sweep below so the sweep's client calls have a live
+  //    server to talk to.
   const server = new OpenCodeServerManager({ client, db: raw, log });
   const healthy = await server.ensureHealthy({ timeoutMs: SERVER_CONNECT_TIMEOUT_MS });
   if (healthy) {
@@ -97,6 +100,15 @@ async function main(): Promise<void> {
   } else {
     log("[velaris-engine] WARNING: OpenCode server NOT healthy — tasks will stay queued until it is reachable");
   }
+
+  // 5b. Orphan-worktree sweep (Phase 6.2 Stage S1.4). No-op unless
+  //     experimental.worktreeIsolation is ON; reclaims worktrees left by a
+  //     crash after a session went terminal (or whose mapping was already
+  //     cleared) while never touching in-flight sessions or non-opencode/*
+  //     branches. Runs after reconcile (session statuses settled) and after
+  //     ensureHealthy so the server is up. `sweepWorktrees` is internally
+  //     bounded/resilient and never throws, so it can never prevent engine boot.
+  await sweepWorktrees(db, client, log);
 
   // 6. Task queue loop. The queue health-gates execution, so it is safe to start
   //    polling immediately even when the server is still coming up.

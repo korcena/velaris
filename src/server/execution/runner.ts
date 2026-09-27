@@ -62,6 +62,16 @@ export interface RunContext {
   directory: string;
   modelId: string;
   /**
+   * Phase 6.2 Stage S1 (engine-only, OpenCode worktree isolation). When present
+   * the session ran in a git worktree at this directory; `directory` above is
+   * the worktree directory too. Absent/null when isolation is off (default) —
+   * the pre-S1 path is unchanged. Never set for Ollama (the native runtime does
+   * not create worktrees).
+   */
+  worktreeDirectory?: string | null;
+  /** Phase 6.2 Stage S1: the worktree's `opencode/*` branch. */
+  worktreeBranch?: string | null;
+  /**
    * Engine log sink (optional). Used to log when the provider resolves the
    * session to a directory different from the task's working_directory — a
    * belt-and-braces note so a future resolution drift stays visible.
@@ -119,6 +129,8 @@ export async function executeTask(ctx: RunContext, opts: RunOptions = {}): Promi
     provider: "opencode",
     modelId,
     directory,
+    worktreeDirectory: ctx.worktreeDirectory ?? null,
+    worktreeBranch: ctx.worktreeBranch ?? null,
   });
   const sessionId = session.id;
 

@@ -18,7 +18,7 @@
  *   GET  /question                                     listPendingQuestions()
  *   POST /question/{requestID}/reply                   replyQuestion()
  *   POST /question/{requestID}/reject                  rejectQuestion()
- *   POST /experimental/worktree {name?,startCommand?}  createWorktree()
+ *   POST /experimental/worktree?directory=<abs> {name?,startCommand?}  createWorktree()
  *   GET  /experimental/worktree                        listWorktrees()
  *   POST /experimental/worktree/reset {directory}      resetWorktree()
  *   DELETE /experimental/worktree {directory}          deleteWorktree()
@@ -345,23 +345,33 @@ export class OpencodeClient {
    * OpenCode exposes an experimental git-worktree endpoint used to isolate an
    * execution in its own checkout. The shapes below were live-verified against
    * the real server:
-   *   - create: POST   /experimental/worktree        {name?, startCommand?} → {name, branch, directory}
+   *   - create: POST   /experimental/worktree?directory=<abs-src-repo> {name?, startCommand?} → {name, branch, directory}
    *   - list:   GET    /experimental/worktree        → string[] of absolute dirs
    *   - reset:  POST   /experimental/worktree/reset  {directory} → boolean
    *   - delete: DELETE /experimental/worktree        {directory} → boolean
+   *
+   * `directory` is REQUIRED and sent as a QUERY param, exactly like
+   * `createSession`: 1.18.32 binds the created worktree to the server's launch
+   * directory when no query param is supplied, which may be the wrong source
+   * repo. Live-verified: supplying `?directory=<abs-src-repo>` makes both the
+   * project hash and the worktree's `gitdir:` point at that repo.
    *
    * These are only called when the `experimental.worktreeIsolation` flag is ON
    * (default OFF); when off, no code path invokes them, so normal execution is
    * unaffected.
    */
-  async createWorktree(opts?: {
+  async createWorktree(opts: {
+    directory: string;
     name?: string;
     startCommand?: string;
   }): Promise<WorktreeInfo> {
+    // The directory must be a non-empty absolute/relative source repo path; the
+    // query is what actually scopes the worktree to that repo.
+    const query = `?directory=${encodeURIComponent(opts.directory)}`;
     const body: Record<string, unknown> = {};
-    if (opts?.name !== undefined) body.name = opts.name;
-    if (opts?.startCommand !== undefined) body.startCommand = opts.startCommand;
-    const parsed = await this.request<WorktreeInfo>("POST", "/experimental/worktree", body);
+    if (opts.name !== undefined) body.name = opts.name;
+    if (opts.startCommand !== undefined) body.startCommand = opts.startCommand;
+    const parsed = await this.request<WorktreeInfo>("POST", `/experimental/worktree${query}`, body);
     return {
       name: typeof parsed?.name === "string" ? parsed.name : "",
       branch: typeof parsed?.branch === "string" ? parsed.branch : "",

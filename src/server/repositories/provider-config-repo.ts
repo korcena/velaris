@@ -187,13 +187,14 @@ export function deleteProviderConfig(db: VelarisDb, id: string): void {
 }
 
 /**
- * EXPERIMENTAL WORKTREE ISOLATION (Phase 5 Stage I — Q7, default OFF).
+ * EXPERIMENTAL WORKTREE ISOLATION (Phase 6.2 Stage S1 — default OFF).
  *
  * Reads `extra.experimental.worktreeIsolation` on the DEFAULT OpenCode provider
- * config. This is an INERT SCAFFOLD flag: when OFF (the default and only tested
- * state) nothing calls the OpenCode `/experimental/worktree` endpoint, so
- * existing execution is unaffected. When ON the scaffold method exists on the
- * client but its live behaviour is unverified (no server on this machine).
+ * config. When OFF (the default) no engine code path calls the OpenCode
+ * `/experimental/worktree` endpoint, so existing execution is byte-identical to
+ * the pre-S1 behaviour. When ON and the routed provider is OpenCode, each run is
+ * created in a git worktree (see `src/engine/worktree.ts`); Ollama is never
+ * isolated.
  */
 export function getWorktreeIsolationEnabled(db: VelarisDb | Database.Database): boolean {
   const raw: Database.Database =

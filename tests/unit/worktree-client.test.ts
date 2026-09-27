@@ -3,7 +3,7 @@
  *
  * Uses an injected fetchImpl so no real network is touched. Pins the
  * live-verified endpoint shapes:
- *   POST   /experimental/worktree        {name?, startCommand?} → {name,branch,directory}
+ *   POST   /experimental/worktree?directory=<abs> {name?, startCommand?} → {name,branch,directory}
  *   GET    /experimental/worktree        → string[] (non-array tolerated)
  *   POST   /experimental/worktree/reset  {directory} → boolean (truthy tolerated)
  *   DELETE /experimental/worktree        {directory} → boolean (truthy tolerated)
@@ -48,13 +48,21 @@ function captureClient(response: Response | (() => Response)): {
 }
 
 describe("OpencodeClient.createWorktree", () => {
-  it("POSTs {name, startCommand} and returns the parsed worktree info", async () => {
+  it("POSTs the source repo as a ?directory= query and {name, startCommand} as the body", async () => {
     const { client, captured } = captureClient(
       jsonResponse({ name: "task-42", branch: "opencode/task-42", directory: "/wt/task-42" }),
     );
-    const info = await client.createWorktree({ name: "task-42", startCommand: "npm i" });
+    const info = await client.createWorktree({
+      directory: "/src/repo",
+      name: "task-42",
+      startCommand: "npm i",
+    });
     expect(captured.method).toBe("POST");
-    expect(captured.url).toBe("http://oc:4096/experimental/worktree");
+    // M2: the source repo must be bound via the QUERY param, exactly like
+    // createSession — OpenCode otherwise roots the worktree at its launch dir.
+    expect(captured.url).toBe(
+      "http://oc:4096/experimental/worktree?directory=%2Fsrc%2Frepo",
+    );
     expect(captured.body).toEqual({ name: "task-42", startCommand: "npm i" });
     expect(info).toEqual({
       name: "task-42",
@@ -63,10 +71,13 @@ describe("OpencodeClient.createWorktree", () => {
     });
   });
 
-  it("tolerates a missing opts body and missing fields (empty POST body, coerced strings)", async () => {
+  it("sends only the required directory query with an empty body when name/startCommand are absent", async () => {
     const { client, captured } = captureClient(jsonResponse({}));
-    const info = await client.createWorktree();
+    const info = await client.createWorktree({ directory: "/src/repo" });
     expect(captured.method).toBe("POST");
+    expect(captured.url).toBe(
+      "http://oc:4096/experimental/worktree?directory=%2Fsrc%2Frepo",
+    );
     expect(captured.body).toEqual({});
     expect(info).toEqual({ name: "", branch: "", directory: "" });
   });

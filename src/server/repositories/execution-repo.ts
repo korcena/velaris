@@ -232,6 +232,16 @@ export function setSessionWorktree(
 }
 
 /**
+ * Engine-only (Phase 6.2 Stage S1): clear the worktree mapping for a session
+ * (both columns → null). Called after a `completed` run's worktree has been
+ * deleted successfully; if deletion fails the row is kept so the boot orphan
+ * sweep can reclaim it.
+ */
+export function clearSessionWorktree(db: VelarisDb, sessionId: string): void {
+  setSessionWorktree(db, sessionId, { directory: null, branch: null });
+}
+
+/**
  * Engine-only (Phase 6.2 Stage S1): every session that has a stored worktree
  * directory, as DTOs (newest first). Used by the boot-time orphan sweep to know
  * which worktrees are still referenced. Returns `ExecutionSessionDto[]` so the

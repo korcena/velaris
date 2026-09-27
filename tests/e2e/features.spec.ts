@@ -133,6 +133,32 @@ test.describe("Settings", () => {
     await page.getByRole("switch", { name: "Reduced motion" }).click();
     await expect(html).not.toHaveClass(/velaris-reduced-motion/);
   });
+
+  test("experimental worktree toggle persists (Phase 6.2 S1.6)", async ({ page }) => {
+    await page.goto("/settings");
+
+    // Default OFF with no engine running — the flag is just an `extra` write.
+    const toggle = page.getByRole("switch", { name: "Worktree isolation (experimental)" });
+    await expect(toggle).not.toBeChecked();
+
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    // Wait for the PATCH to land before reloading (the state update is optimistic).
+    await expect(page.getByText("Worktree isolation (experimental) enabled")).toBeVisible();
+
+    // Persisted to the OpenCode provider config; survives a reload.
+    await page.reload();
+    await expect(
+      page.getByRole("switch", { name: "Worktree isolation (experimental)" }),
+    ).toBeChecked();
+
+    // Toggle back off so the shared E2E DB is left in the default state.
+    await page.getByRole("switch", { name: "Worktree isolation (experimental)" }).click();
+    await expect(page.getByText("Worktree isolation disabled")).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: "Worktree isolation (experimental)" }),
+    ).not.toBeChecked();
+  });
 });
 
 test.describe("Dark theme", () => {

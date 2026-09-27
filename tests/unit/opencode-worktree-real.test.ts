@@ -47,7 +47,12 @@ describe.skipIf(!OPTED_IN)("@real OpenCode worktree round-trip", () => {
   it("creates, lists, resets and deletes a worktree", async (ctx) => {
     if (!live) ctx.skip();
     const client = new OpencodeClient({ baseUrl: resolveBaseUrl() });
-    const info = await client.createWorktree({ name: `velaris-real-${Date.now()}` });
+    // M2: bind the worktree to THIS repo via the required ?directory= param.
+    const sourceRepo = process.cwd();
+    const info = await client.createWorktree({
+      directory: sourceRepo,
+      name: `velaris-real-${Date.now()}`,
+    });
     expect(typeof info.name).toBe("string");
     expect(typeof info.branch).toBe("string");
     expect(typeof info.directory).toBe("string");
