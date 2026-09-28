@@ -583,12 +583,53 @@ describe("full migration chain from the Phase 1 schema head", () => {
     expect(db.pragma("foreign_key_check")).toHaveLength(0);
     db.close();
   });
+
+  it("the 0012 tasks.deleted_at migration is ADDITIVE (ADD COLUMN + index, no DROP/rebuild/PRAGMA)", () => {
+    const sql = fs.readFileSync(
+      path.join(DRIZZLE_DIR, "0012_material_hedge_knight.sql"),
+      "utf8",
+    );
+    // Phase 5 rule: purely additive nullable column + index — no table rebuild.
+    expect(sql).not.toMatch(/\bDROP\b/i);
+    expect(sql).not.toMatch(/CREATE\s+TABLE/i);
+    expect(sql).not.toMatch(/PRAGMA/i);
+    const statements = splitStatements(sql);
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toMatch(/^ALTER TABLE `tasks` ADD `deleted_at` text;?$/i);
+    expect(statements[1]).toMatch(/^CREATE INDEX `idx_tasks_deleted` ON `tasks` \(`deleted_at`\);?$/i);
+  });
+
+  it("0012 lands nullable tasks.deleted_at + idx_tasks_deleted, FK-clean", () => {
+    const db = new Database(dbPath);
+    const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const deleted = cols.find((c) => c.name === "deleted_at");
+    expect(deleted).toBeTruthy();
+    expect(deleted!.notnull).toBe(0); // nullable
+
+    const indexList = (db.prepare("PRAGMA index_list(tasks)").all() as Array<{ name: string }>).map(
+      (r) => r.name,
+    );
+    expect(indexList).toContain("idx_tasks_deleted");
+    const colsOf = (index: string): string[] =>
+      (db.prepare(`PRAGMA index_info(${index})`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(colsOf("idx_tasks_deleted")).toEqual(["deleted_at"]);
+
+    // The pre-existing Phase-1 task defaults to live (NULL).
+    const t1 = db.prepare("SELECT deleted_at FROM tasks WHERE id = 't1'").get() as {
+      deleted_at: string | null;
+    };
+    expect(t1.deleted_at).toBeNull();
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
 });
 
 /* ================================================================== */
 /* B. Execution rows survive the destructive 0004 rebuild in-chain     */
 /* ================================================================== */
-
 describe("execution history survives the in-chain 0004 rebuild + 0005", () => {
   let tmpDir: string;
   let dbPath: string;

@@ -364,6 +364,34 @@ describe("0005 additive migration on a seeded copy of the real DB", () => {
     db.close();
   });
 
+  it("0012 adds nullable tasks.deleted_at (additive); pre-existing task survives with NULL", () => {
+    if (!upgraded) return;
+    const db = new Database(upgradePath);
+    db.pragma("foreign_keys = ON");
+
+    const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const deleted = cols.find((c) => c.name === "deleted_at");
+    expect(deleted).toBeTruthy();
+    expect(deleted!.notnull).toBe(0); // nullable
+
+    const indexList = (db.prepare("PRAGMA index_list(tasks)").all() as Array<{ name: string }>).map(
+      (r) => r.name,
+    );
+    expect(indexList).toContain("idx_tasks_deleted");
+
+    // The seeded pre-existing task survives and defaults to live (NULL).
+    expect(count(db, "tasks", "id='task-p6'")).toBe(1);
+    const task = db
+      .prepare("SELECT deleted_at FROM tasks WHERE id = 'task-p6'")
+      .get() as { deleted_at: string | null };
+    expect(task.deleted_at).toBeNull();
+    expect(db.pragma("foreign_key_check")).toHaveLength(0);
+    db.close();
+  });
+
   it("0010/0011 second migrate is idempotent — FTS rows and sources are unchanged", () => {
     if (!upgraded) return;
     const ftsBefore = (() => {

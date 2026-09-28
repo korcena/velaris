@@ -77,7 +77,8 @@ test.describe("default ACOTAR houses", () => {
     await expect(page.getByText(title, { exact: true })).toBeVisible();
 
     // Cleanup: remove the quest so later specs relying on the empty board pass
-    // (the seeded houses remain the shared fixture).
-    expect((await request.delete(`/api/tasks/${task.id}`)).status()).toBe(204);
+    // (the seeded houses remain the shared fixture). DELETE is now a soft delete
+    // and returns 200.
+    expect((await request.delete(`/api/tasks/${task.id}`)).status()).toBe(200);
   });
 });

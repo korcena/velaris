@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState, useCallback } from "react";
-import { Activity, Loader2, Plus, XCircle } from "lucide-react";
+import { Activity, Loader2, Plus, Trash2, XCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -12,6 +12,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -42,7 +52,7 @@ import { TaskStatusBadge, isTerminalStatus } from "@/components/houses/task-stat
 import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import { taskCreateSchema } from "@/shared/schemas/task";
-import { DEFAULT_TASK_TYPES, TASK_PRIORITIES } from "@/shared/constants";
+import { DEFAULT_TASK_TYPES, TASK_PRIORITIES, isTaskDeletable } from "@/shared/constants";
 import type { TaskDto, HouseDto, ProjectDto, ExecutionEventDto } from "@/shared/types";
 
 type TaskFormValues = z.infer<typeof taskCreateSchema>;
@@ -58,6 +68,7 @@ export default function QuestBoardPage() {
   const [activityOpen, setActivityOpen] = useState<string | null>(null);
   const [eventsByTask, setEventsByTask] = useState<Record<string, ExecutionEventDto[]>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TaskDto | null>(null);
 
   const { sequence } = useVelarisStream();
 
@@ -147,6 +158,19 @@ export default function QuestBoardPage() {
     }
   }
 
+  async function deleteTask(id: string) {
+    setBusyId(id);
+    try {
+      await apiFetch<{ task: TaskDto }>(`/api/tasks/${id}`, { method: "DELETE" });
+      toast.success("Quest removed from the board");
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove quest");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function onSubmit(values: TaskFormValues) {
     setSaving(true);
     try {
@@ -230,6 +254,7 @@ export default function QuestBoardPage() {
                       setActivityOpen((cur) => (cur === task.id ? null : task.id))
                     }
                     onCancel={() => cancelTask(task.id)}
+                    onDelete={() => setDeleteTarget(task)}
                   />
                 ))}
               </TableBody>
@@ -398,6 +423,31 @@ export default function QuestBoardPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove quest from the board?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The quest will be hidden from the Quest Board. Its history is kept and it can be
+              restored from the Archives or the house panel.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="quest-delete-confirm"
+              onClick={() => {
+                const target = deleteTarget;
+                setDeleteTarget(null);
+                if (target) void deleteTask(target.id);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -411,6 +461,7 @@ function FragmentRow({
   busy,
   onToggleActivity,
   onCancel,
+  onDelete,
 }: {
   task: TaskDto;
   houseName: string;
@@ -420,6 +471,7 @@ function FragmentRow({
   busy: boolean;
   onToggleActivity: () => void;
   onCancel: () => void;
+  onDelete: () => void;
 }) {
   const cancellable = !isTerminalStatus(task.status);
   return (
@@ -432,6 +484,7 @@ function FragmentRow({
       busy={busy}
       onToggleActivity={onToggleActivity}
       onCancel={onCancel}
+      onDelete={onDelete}
       cancellable={cancellable}
     />
   );
@@ -446,6 +499,7 @@ function FragmentRowContent({
   busy,
   onToggleActivity,
   onCancel,
+  onDelete,
   cancellable,
 }: {
   task: TaskDto;
@@ -456,8 +510,10 @@ function FragmentRowContent({
   busy: boolean;
   onToggleActivity: () => void;
   onCancel: () => void;
+  onDelete: () => void;
   cancellable: boolean;
 }) {
+  const deletable = isTaskDeletable(task.status);
   return (
     <Fragment>
       <TableRow>
@@ -498,6 +554,22 @@ function FragmentRowContent({
               Cancel
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+            disabled={busy || !deletable}
+            title={
+              deletable
+                ? "Remove this quest from the board"
+                : `A '${task.status}' quest cannot be removed`
+            }
+            data-testid={`quest-delete-${task.id}`}
+            className="text-muted-foreground hover:text-velaris-crimson"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </Button>
         </TableCell>
       </TableRow>
       {activityOpen ? (

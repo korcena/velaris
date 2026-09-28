@@ -95,6 +95,7 @@ interface ArchiveRow {
   description: string;
   resultContent: string | null;
   createdAt: string;
+  deletedAt: string | null;
 }
 
 function rowToDto(row: ArchiveRow): ArchiveEntryDto {
@@ -109,6 +110,7 @@ function rowToDto(row: ArchiveRow): ArchiveEntryDto {
     cost: row.cost,
     summarySnippet: snippet(row.resultContent) || snippet(row.description),
     createdAt: row.createdAt,
+    deletedAt: row.deletedAt,
   };
 }
 
@@ -210,7 +212,8 @@ export function searchArchives(
          (SELECT a.content FROM artifacts a
            WHERE a.task_id = t.id AND a.kind = 'result'
            ORDER BY a.created_at DESC LIMIT 1) AS resultContent,
-         t.created_at AS createdAt
+         t.created_at AS createdAt,
+         t.deleted_at AS deletedAt
        FROM tasks t
        LEFT JOIN houses h ON h.id = t.house_id
       WHERE ${where.sql}

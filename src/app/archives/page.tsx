@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Library, Search, RefreshCw } from "lucide-react";
+import { Library, RotateCcw, Search, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -121,6 +121,17 @@ export default function ArchivesPage() {
   function applyFilter<T>(setter: (v: T) => void, value: T) {
     setPage(0);
     setter(value);
+  }
+
+  /** Restore a soft-deleted archived task, then refresh the current page. */
+  async function restoreEntry(taskId: string) {
+    try {
+      await apiFetch<{ task: unknown }>(`/api/tasks/${taskId}/restore`, { method: "POST" });
+      toast.success("Quest restored to the board");
+      await load({ q: query, houseId, status, dateRange, page });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to restore quest");
+    }
   }
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -246,6 +257,7 @@ export default function ArchivesPage() {
                   <TableHead className="text-right">Sessions</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
                   <TableHead>Archived</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -257,6 +269,15 @@ export default function ArchivesPage() {
                         <div className="truncate text-xs text-muted-foreground">
                           {entry.summarySnippet}
                         </div>
+                      ) : null}
+                      {entry.deletedAt ? (
+                        <Badge
+                          variant="outline"
+                          className="mt-1 border-velaris-crimson/40 text-velaris-crimson"
+                          data-testid={`archive-deleted-${entry.taskId}`}
+                        >
+                          deleted
+                        </Badge>
                       ) : null}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -287,6 +308,19 @@ export default function ArchivesPage() {
                       <time dateTime={entry.createdAt}>
                         {new Date(entry.createdAt).toLocaleString()}
                       </time>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {entry.deletedAt ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void restoreEntry(entry.taskId)}
+                          data-testid={`archive-restore-${entry.taskId}`}
+                        >
+                          <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                          Restore
+                        </Button>
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ))}

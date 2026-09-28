@@ -9,6 +9,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { RotateCcw } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -37,10 +40,15 @@ export function TaskResults({ houseId, refreshKey }: TaskResultsProps) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch all house tasks, then narrow to finishable candidates locally.
-      const res = await apiFetch<{ tasks: TaskDto[] }>(`/api/tasks?houseId=${houseId}`);
+      // Fetch all house tasks (incl. deleted), then narrow to finishable
+      // candidates locally. A deleted task is always kept so its Restore
+      // control stays reachable — including a deleted `queued` task, which no
+      // other surface (Archives is terminal-only) can restore.
+      const res = await apiFetch<{ tasks: TaskDto[] }>(
+        `/api/tasks?houseId=${houseId}&deleted=include`,
+      );
       const candidates = res.tasks.filter(
-        (t) => t.status === "completed" || t.status === "failed",
+        (t) => t.deletedAt !== null || t.status === "completed" || t.status === "failed",
       );
       setTasks(candidates);
     } catch {
@@ -53,6 +61,20 @@ export function TaskResults({ houseId, refreshKey }: TaskResultsProps) {
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  /** Restore a soft-deleted quest, then refresh the candidate list. */
+  const restoreTask = useCallback(
+    async (id: string) => {
+      try {
+        await apiFetch<{ task: TaskDto }>(`/api/tasks/${id}/restore`, { method: "POST" });
+        toast.success("Quest restored to the board");
+        await load();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to restore quest");
+      }
+    },
+    [load],
+  );
 
   // Default to the latest completed task.
   useEffect(() => {
@@ -120,9 +142,29 @@ export function TaskResults({ houseId, refreshKey }: TaskResultsProps) {
       </div>
 
       {selectedTask ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">{selectedTask.title ?? "Untitled quest"}</span>{" "}
           · <span className={selectedTask.status === "failed" ? "text-velaris-crimson" : "text-foreground"}>{selectedTask.status ?? "finished"}</span>
+          {selectedTask.deletedAt ? (
+            <>
+              <Badge
+                variant="outline"
+                className="border-velaris-crimson/40 text-velaris-crimson"
+                data-testid="task-results-deleted-badge"
+              >
+                deleted
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void restoreTask(selectedTask.id)}
+                data-testid="task-results-restore"
+              >
+                <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                Restore
+              </Button>
+            </>
+          ) : null}
         </p>
       ) : null}
 

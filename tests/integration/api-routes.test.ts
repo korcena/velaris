@@ -22,7 +22,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 
-import { resetDbForTests, getRawDb } from "@/lib/db";
+import { resetDbForTests, getDb, getRawDb } from "@/lib/db";
 import { resetBootstrapForTests } from "@/server/bootstrap";
 import { DEFAULT_HOUSES } from "@/shared/constants";
 
@@ -54,6 +54,9 @@ import {
   PATCH as patchTask,
   DELETE as deleteTaskRoute,
 } from "@/app/api/tasks/[id]/route";
+import { POST as restoreTaskRoute } from "@/app/api/tasks/[id]/restore/route";
+import { setTaskStatus } from "@/server/repositories/task-repo";
+import { listAuditLog } from "@/server/repositories/audit-repo";
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -977,15 +980,102 @@ describe("GET/PATCH/DELETE /api/tasks/{id}", () => {
     expect(res.status).toBe(400);
   });
 
-  it("DELETE removes the task → 204; unknown → 404", async () => {
+  it("DELETE soft-deletes a queued task → 200 with deletedAt, status unchanged, hidden from default list", async () => {
     const id = await makeTask();
-    const res = await deleteTaskRoute(req(`${BASE}/api/tasks/${id}`, { method: "DELETE" }), idCtx(id));
-    expect(res.status).toBe(204);
-    expect((await getTaskById(req(`${BASE}/api/tasks/${id}`), idCtx(id))).status).toBe(404);
+    // Cancel so the status is terminal (Archives-visible) before deleting.
+    await patchTask(jsonReq("PATCH", `${BASE}/api/tasks/${id}`, { status: "cancelled" }), idCtx(id));
+
+    const res = await deleteTaskRoute(
+      req(`${BASE}/api/tasks/${id}`, { method: "DELETE" }),
+      idCtx(id),
+    );
+    expect(res.status).toBe(200);
+    const { task } = await res.json();
+    expect(task.deletedAt).not.toBeNull();
+    expect(task.status).toBe("cancelled"); // status never changed by soft delete
+
+    // Hidden from the default list.
+    const list = await (await listTasks(req(`${BASE}/api/tasks`))).json();
+    expect(list.tasks.some((t: { id: string }) => t.id === id)).toBe(false);
+
+    // Still reachable by id (detail/restore need it).
+    const byId = await getTaskById(req(`${BASE}/api/tasks/${id}`), idCtx(id));
+    expect(byId.status).toBe(200);
+    expect((await byId.json()).task.deletedAt).not.toBeNull();
+
+    // And the DELETE writes an audit row.
+    const audit = listAuditLog(getDb(), { entityType: "task", entityId: id });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe("delete");
+    expect(audit[0].actor).toBe("user");
+  });
+
+  it("DELETE is idempotent (200) and 404 for unknown", async () => {
+    const id = await makeTask();
+    const first = await deleteTaskRoute(req(`${BASE}/api/tasks/${id}`, { method: "DELETE" }), idCtx(id));
+    expect(first.status).toBe(200);
+    const firstDeletedAt = (await first.json()).task.deletedAt;
+    const second = await deleteTaskRoute(req(`${BASE}/api/tasks/${id}`, { method: "DELETE" }), idCtx(id));
+    expect(second.status).toBe(200);
+    expect((await second.json()).task.deletedAt).toBe(firstDeletedAt);
 
     const missing = randomUUID();
     expect(
       (await deleteTaskRoute(req(`${BASE}/api/tasks/${missing}`, { method: "DELETE" }), idCtx(missing))).status,
+    ).toBe(404);
+  });
+
+  it("DELETE rejects an active task with 422", async () => {
+    const id = await makeTask();
+    // Force an active/in-flight status directly (PATCH cannot set it).
+    setTaskStatus(getDb(), id, "running");
+    const res = await deleteTaskRoute(req(`${BASE}/api/tasks/${id}`, { method: "DELETE" }), idCtx(id));
+    expect(res.status).toBe(422);
+    // The task is untouched.
+    expect((await (await getTaskById(req(`${BASE}/api/tasks/${id}`), idCtx(id))).json()).task.deletedAt).toBeNull();
+  });
+
+  it("GET /api/tasks?deleted=include|only behaves; invalid → 400", async () => {
+    const liveId = await makeTask();
+    const deletedId = await makeTask();
+    await deleteTaskRoute(req(`${BASE}/api/tasks/${deletedId}`, { method: "DELETE" }), idCtx(deletedId));
+
+    const included = await (await listTasks(req(`${BASE}/api/tasks?deleted=include`))).json();
+    const includedIds = included.tasks.map((t: { id: string }) => t.id);
+    expect(includedIds).toEqual(expect.arrayContaining([liveId, deletedId]));
+
+    const only = await (await listTasks(req(`${BASE}/api/tasks?deleted=only`))).json();
+    expect(only.tasks.map((t: { id: string }) => t.id)).toEqual([deletedId]);
+
+    const bad = await listTasks(req(`${BASE}/api/tasks?deleted=nonsense`));
+    expect(bad.status).toBe(400);
+  });
+
+  it("POST /restore is reversible; queued → cancelled; 404 for unknown", async () => {
+    // A terminal task restores as-is.
+    const terminalId = await makeTask();
+    await patchTask(jsonReq("PATCH", `${BASE}/api/tasks/${terminalId}`, { status: "cancelled" }), idCtx(terminalId));
+    await deleteTaskRoute(req(`${BASE}/api/tasks/${terminalId}`, { method: "DELETE" }), idCtx(terminalId));
+
+    const restored = await restoreTaskRoute(req(`${BASE}/api/tasks/${terminalId}/restore`, { method: "POST" }), idCtx(terminalId));
+    expect(restored.status).toBe(200);
+    const restoredTask = (await restored.json()).task;
+    expect(restoredTask.deletedAt).toBeNull();
+    expect(restoredTask.status).toBe("cancelled");
+
+    // A queued task is flipped to cancelled on restore.
+    const queuedId = await makeTask();
+    await deleteTaskRoute(req(`${BASE}/api/tasks/${queuedId}`, { method: "DELETE" }), idCtx(queuedId));
+    const restoredQueued = await restoreTaskRoute(req(`${BASE}/api/tasks/${queuedId}/restore`, { method: "POST" }), idCtx(queuedId));
+    expect(restoredQueued.status).toBe(200);
+    const queuedTask = (await restoredQueued.json()).task;
+    expect(queuedTask.deletedAt).toBeNull();
+    expect(queuedTask.status).toBe("cancelled");
+
+    // Unknown restore → 404.
+    const missing = randomUUID();
+    expect(
+      (await restoreTaskRoute(req(`${BASE}/api/tasks/${missing}/restore`, { method: "POST" }), idCtx(missing))).status,
     ).toBe(404);
   });
 });

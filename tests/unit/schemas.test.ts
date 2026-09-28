@@ -24,7 +24,7 @@ import {
   providerConfigCreateSchema,
   providerConfigUpdateSchema,
 } from "@/shared/schemas/provider-config";
-import { taskCreateSchema, taskUpdateSchema } from "@/shared/schemas/task";
+import { taskCreateSchema, taskUpdateSchema, taskDeletedFilterSchema } from "@/shared/schemas/task";
 import { uuidSchema, trimmedNonEmpty, parseJson } from "@/shared/schemas/common";
 import {
   planSchema,
@@ -652,6 +652,24 @@ describe("taskUpdateSchema", () => {
   });
 });
 
+describe("taskDeletedFilterSchema", () => {
+  it("defaults to 'exclude' when absent", () => {
+    expect(taskDeletedFilterSchema.parse(undefined)).toBe("exclude");
+  });
+
+  it("accepts exclude/include/only", () => {
+    for (const v of ["exclude", "include", "only"] as const) {
+      expect(taskDeletedFilterSchema.parse(v)).toBe(v);
+    }
+  });
+
+  it("rejects anything else (including booleans)", () => {
+    for (const v of ["nonsense", "true", "all", ""]) {
+      expect(() => taskDeletedFilterSchema.parse(v)).toThrow();
+    }
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* High Lord plan & court schemas (Phase 4)                            */
 /* ------------------------------------------------------------------ */
@@ -850,10 +868,10 @@ describe("audit constants", () => {
     expect(AUDIT_ENTITY_TYPES).toContain("template");
   });
 
-  it("AUDIT_ENTITY_TYPES omits 'task' (no task CRUD is audited; m5)", () => {
-    // Q9 scoped audit to web user-action rows; task lifecycle lives in
-    // execution_events, so a 'task' filter option could never return rows.
-    expect(AUDIT_ENTITY_TYPES).not.toContain("task");
+  it("AUDIT_ENTITY_TYPES includes 'task' (soft-delete/restore are audited)", () => {
+    // Soft-delete and restore write real user-action audit rows, so 'task' is
+    // a valid filter option that can return rows.
+    expect(AUDIT_ENTITY_TYPES).toContain("task");
   });
 });
 

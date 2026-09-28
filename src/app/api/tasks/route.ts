@@ -3,14 +3,14 @@ import { bootstrapDb } from "@/server/bootstrap";
 import { getDb } from "@/lib/db";
 import { listTasks, createTask } from "@/server/repositories/task-repo";
 import { agentBelongsToHouse } from "@/server/repositories/house-repo";
-import { taskCreateSchema } from "@/shared/schemas/task";
+import { taskCreateSchema, taskDeletedFilterSchema } from "@/shared/schemas/task";
 import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 import { TASK_STATUSES } from "@/shared/constants";
 import type { TaskStatus } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/tasks?houseId=&projectId=&status= */
+/** GET /api/tasks?houseId=&projectId=&status=&deleted=exclude|include|only */
 export async function GET(req: NextRequest) {
   bootstrapDb();
   const sp = req.nextUrl.searchParams;
@@ -21,7 +21,19 @@ export async function GET(req: NextRequest) {
   const status = (TASK_STATUSES as readonly string[]).includes(statusRaw ?? "")
     ? (statusRaw as TaskStatus)
     : undefined;
-  const tasks = listTasks(getDb(), { houseId, projectId, status });
+  // Tri-state soft-delete filter; invalid values are a 400 (not a silent default).
+  const deletedRaw = sp.get("deleted");
+  const deletedParsed =
+    deletedRaw === null ? undefined : taskDeletedFilterSchema.safeParse(deletedRaw);
+  if (deletedParsed && !deletedParsed.success) {
+    return badRequest("deleted must be one of: exclude, include, only");
+  }
+  const tasks = listTasks(getDb(), {
+    houseId,
+    projectId,
+    status,
+    deleted: deletedParsed?.data,
+  });
   return ok({ tasks });
 }
 

@@ -14,7 +14,7 @@ import {
 } from "@/server/services/house-service";
 import { ProjectNotFoundError, ProjectDirectoryExistsError, ProjectHasTasksError, ProjectDirectoryInvalidError } from "@/server/repositories/project-repo";
 import { ProviderConfigNotFoundError } from "@/server/repositories/provider-config-repo";
-import { TaskNotFoundError, InvalidTaskStatusTransitionError } from "@/server/repositories/task-repo";
+import { TaskNotFoundError, InvalidTaskStatusTransitionError, TaskNotDeletableError } from "@/server/repositories/task-repo";
 import {
   TemplateNotFoundError,
   SeededTemplateError,
@@ -77,7 +77,7 @@ export function routeError(err: unknown): NextResponse {
   if (err instanceof HouseNotArchivedError) {
     return conflict(err.message);
   }
-  if (err instanceof InvalidStatusTransitionError || err instanceof InvalidTaskStatusTransitionError || err instanceof HighLordTransitionError) {
+  if (err instanceof InvalidStatusTransitionError || err instanceof InvalidTaskStatusTransitionError || err instanceof HighLordTransitionError || err instanceof TaskNotDeletableError) {
     return badTransition(err.message);
   }
   // SQLite constraint failures (FK references to nonexistent rows, CHECK

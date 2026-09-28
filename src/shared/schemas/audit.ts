@@ -17,6 +17,7 @@ const AUDIT_ENTITY_TYPE_TUPLE = [
   "provider_config",
   "approval",
   "template",
+  "task",
 ] as const;
 
 /** Default page size for the audit list (matches the plan's Settings card). */

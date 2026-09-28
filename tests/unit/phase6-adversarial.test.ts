@@ -337,11 +337,12 @@ describe("ADVERSARIAL: archive LIKE escaping + injection (Stage D)", () => {
 /* ================================================================== */
 
 describe("ADVERSARIAL: migration additive-only + integrity (Stage 0)", () => {
-  it("0005/0006/0007 contain no destructive DDL and no in-file PRAGMA toggles", () => {
+  it("0005/0006/0007/0012 contain no destructive DDL and no in-file PRAGMA toggles", () => {
     for (const tag of [
       "0005_yielding_human_cannonball",
       "0006_multi_agent_tasks",
       "0007_violet_inertia",
+      "0012_material_hedge_knight",
     ]) {
       const sql = fs.readFileSync(path.resolve(process.cwd(), "drizzle", `${tag}.sql`), "utf8");
       expect({ tag, pragma: /PRAGMA\s+foreign_keys/i.test(sql) }).toEqual({ tag, pragma: false });

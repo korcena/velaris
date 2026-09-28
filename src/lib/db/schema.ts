@@ -182,12 +182,20 @@ export const tasks = sqliteTable(
     attachments: text("attachments").notNull().default("[]"),
     createdAt: text("created_at").notNull().default(now()),
     updatedAt: text("updated_at").notNull().default(now()),
+    /**
+     * Soft-delete marker. NULL = live (the default for every existing row);
+     * a timestamp hides the task from the Quest Board while keeping its history
+     * visible in Archives/Ledgers/house panel. Status is never changed by a
+     * soft delete. The engine excludes `deleted_at IS NOT NULL` rows.
+     */
+    deletedAt: text("deleted_at"),
   },
   (t) => [
     index("idx_tasks_house").on(t.houseId),
     index("idx_tasks_status").on(t.status),
     index("idx_tasks_project").on(t.projectId),
     index("idx_tasks_agent").on(t.agentId),
+    index("idx_tasks_deleted").on(t.deletedAt),
     // Phase 6.2 Stage S0: serve listTasks/archive (created_at DESC) and
     // queued-task ordering (status + created_at ASC).
     index("idx_tasks_created").on(t.createdAt),

@@ -14,6 +14,7 @@
  */
 
 import type Database from "better-sqlite3";
+import { and, eq, isNull } from "drizzle-orm";
 import type { VelarisDb } from "@/lib/db";
 import type { OpencodeClient } from "@/server/opencode";
 import {
@@ -150,7 +151,14 @@ async function reconcileHighLord(db: VelarisDb, log: (m: string) => void): Promi
 }
 
 function listHlParentTasks(db: VelarisDb, hlHouseId: string): TaskRow[] {
-  return db.select().from(tasks).all().filter((t) => t.houseId === hlHouseId);
+  // Soft-deleted parents are excluded so reconcile can never act on a removed
+  // row (defense-in-depth: running is not deletable today, so this is inert
+  // until the deletion rules change).
+  return db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.houseId, hlHouseId), isNull(tasks.deletedAt)))
+    .all();
 }
 
 /** True when `task` is a High Lord parent task with a live plan (subtask rows). */

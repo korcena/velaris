@@ -4,14 +4,16 @@ import { getDb } from "@/lib/db";
 import {
   getTask,
   updateTask,
-  deleteTask,
+  softDeleteTask,
   TaskNotFoundError,
+  TaskNotDeletableError,
   InvalidTaskStatusTransitionError,
 } from "@/server/repositories/task-repo";
 import { getSubtaskByChildTaskId, listSubtasksForParent } from "@/server/repositories/subtask-repo";
 import { agentBelongsToHouse } from "@/server/repositories/house-repo";
+import { recordAudit } from "@/server/repositories/audit-repo";
 import { taskUpdateSchema } from "@/shared/schemas/task";
-import { ok, noContent, notFound, badRequest, badTransition, routeErrorOrMapped } from "@/server/api-helpers";
+import { ok, notFound, badRequest, badTransition, routeErrorOrMapped } from "@/server/api-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -96,15 +98,27 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   }
 }
 
-/** DELETE /api/tasks/{id} */
+/**
+ * DELETE /api/tasks/{id} — SOFT delete (Phase 6.2). Sets `deleted_at`; the
+ * task's status is unchanged, history is retained, and the engine excludes it.
+ * Idempotent (already deleted → 200 no-op). 422 for active tasks.
+ */
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   bootstrapDb();
   const { id } = await ctx.params;
   try {
-    deleteTask(getDb(), id);
-    return noContent();
+    const task = softDeleteTask(getDb(), id);
+    recordAudit(getDb(), {
+      actor: "user",
+      action: "delete",
+      entityType: "task",
+      entityId: id,
+      metadata: { title: task.title, status: task.status },
+    });
+    return ok({ task });
   } catch (err) {
     if (err instanceof TaskNotFoundError) return notFound(err.message);
+    if (err instanceof TaskNotDeletableError) return badTransition(err.message);
     return routeErrorOrMapped(err);
   }
 }

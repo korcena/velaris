@@ -128,6 +128,29 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "paused",
 ] as const;
 
+/**
+ * Task statuses a soft delete is allowed to remove from the Quest Board. These
+ * are the terminal states plus `queued` (a posting that has not started can be
+ * withdrawn). Active/in-flight states — `running`, `awaiting_approval`,
+ * `awaiting_input`, `paused` — are NOT deletable: deleting them would strand an
+ * executing plan or an item awaiting the user.
+ *
+ * Single source of truth: imported by the repo (guard), the API route, and the
+ * Quest Board UI (button enablement). Pure, no side effects.
+ */
+export const DELETABLE_TASK_STATUSES: readonly TaskStatus[] = [
+  "queued",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+] as const;
+
+/** True when a task in `status` may be soft-deleted. See DELETABLE_TASK_STATUSES. */
+export function isTaskDeletable(status: TaskStatus): boolean {
+  return (DELETABLE_TASK_STATUSES as readonly string[]).includes(status);
+}
+
 /** execution_sessions.status values (echoed by ck_execution_sessions_status). */
 export const SESSION_STATUSES: readonly SessionStatus[] = [
   "pending",
@@ -372,9 +395,9 @@ export const AUDIT_ACTORS: readonly AuditActor[] = ["user", "engine"] as const;
  * deliberately extensible so new audited entities never force a table rebuild);
  * this list is the well-known set the Settings UI filter offers.
  *
- * `task` is deliberately absent: no task CRUD is audited (Q9 scoped audit to
- * web user-action rows; task lifecycle lives in execution_events), so a `task`
- * filter option could never return rows. Add it back only alongside real writes.
+ * `task` is included because the soft-delete/restore routes record real user
+ * task writes in audit_log (action 'delete'/'restore'), so a `task` filter can
+ * return rows.
  */
 export const AUDIT_ENTITY_TYPES: readonly AuditEntityType[] = [
   "house",
@@ -383,6 +406,7 @@ export const AUDIT_ENTITY_TYPES: readonly AuditEntityType[] = [
   "provider_config",
   "approval",
   "template",
+  "task",
 ] as const;
 
 /** Default OpenCode-provider IDs & model hints (never hardcoded at runtime; advisory only). */

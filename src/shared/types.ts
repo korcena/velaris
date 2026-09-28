@@ -172,6 +172,12 @@ export interface TaskDto {
   attachments: TaskAttachment[];
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
+  /**
+   * Soft-delete marker. `null` = live; a timestamp means the posting has been
+   * removed from the Quest Board (status unchanged, history retained, engine
+   * excludes it).
+   */
+  deletedAt: IsoTimestamp | null;
 }
 
 /* ------------------------------ Health ------------------------------ */
@@ -471,7 +477,7 @@ export type AuditActor = "user" | "engine";
  * audit_log.entity_type values. Deliberately NOT a CHECK constraint (the
  * column is extensible) so a new audited entity never forces a table rebuild;
  * this union + AUDIT_ENTITY_TYPES list the known set surfaced by the UI.
- * `task` is absent because no task CRUD is audited (see AUDIT_ENTITY_TYPES).
+ * `task` is present because soft-delete/restore are audited user actions.
  */
 export type AuditEntityType =
   | "house"
@@ -479,7 +485,8 @@ export type AuditEntityType =
   | "project"
   | "provider_config"
   | "approval"
-  | "template";
+  | "template"
+  | "task";
 
 /** A single append-only audit entry surfaced to Settings. */
 export interface AuditLogDto {
@@ -554,6 +561,8 @@ export interface ArchiveEntryDto {
   /** Best-effort first line of the task description or a result artifact. */
   summarySnippet: string;
   createdAt: IsoTimestamp;
+  /** Soft-delete marker; non-null means the archived task was removed from the board. */
+  deletedAt: IsoTimestamp | null;
 }
 
 /** Parsed/validated archive query (see archiveQuerySchema). */

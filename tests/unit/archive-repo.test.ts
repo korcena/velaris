@@ -230,6 +230,21 @@ describe("archives golden dataset (≥100 sessions)", () => {
     expect(res.entries).toEqual([]);
     expect(res.total).toBe(0);
   });
+
+  it("still returns a soft-deleted terminal task, with deletedAt set (live rows null)", () => {
+    const raw = getRawDb();
+    const deletedAt = new Date().toISOString();
+    raw.prepare("UPDATE tasks SET deleted_at = ? WHERE id = 'task-10'").run(deletedAt);
+
+    const res = search({ q: "Quest 10 ", limit: 10 });
+    expect(res.total).toBe(1);
+    expect(res.entries[0].taskId).toBe("task-10");
+    expect(res.entries[0].deletedAt).toBe(deletedAt);
+
+    // A live row exposes deletedAt === null.
+    const live = search({ q: "Quest 11 ", limit: 10 });
+    expect(live.entries[0].deletedAt).toBeNull();
+  });
 });
 
 /* ================================================================== */

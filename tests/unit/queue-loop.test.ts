@@ -363,4 +363,36 @@ describe("TaskQueue", () => {
     setTaskStatus(getDb(), task.id, "cancelled");
     expect(claimQueuedTask(raw, task.id)).toBe(false);
   });
+
+  it("never lists, claims or executes a soft-deleted queued task", async () => {
+    const house = createHouse(getDb(), {
+      name: "H",
+      description: null,
+      agent: { name: "A", role: "R" },
+      configuration: makeHouseConfig([tmpDir]),
+    });
+    const task = createTask(getDb(), {
+      title: "T",
+      houseId: house.id,
+      workingDirectory: tmpDir,
+    });
+    // Soft-delete the queued task directly (status stays 'queued').
+    getRawDb()
+      .prepare("UPDATE tasks SET deleted_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), task.id);
+
+    // Omitted from the engine poll's queue list and never claimable.
+    expect(listQueuedTaskIds(getRawDb())).not.toContain(task.id);
+    expect(claimQueuedTask(getRawDb(), task.id)).toBe(false);
+
+    // A full queue pass does not execute it; status stays 'queued' (not running).
+    const adapter = { startTask: vi.fn() } as unknown as AgentExecutionProvider;
+    const queue = makeQueue(fakeClient(true), adapter);
+    await runOnePass(queue);
+
+    expect(executeTask).not.toHaveBeenCalled();
+    const after = getTask(getDb(), task.id)!;
+    expect(after.status).toBe("queued");
+    expect(after.deletedAt).not.toBeNull();
+  });
 });

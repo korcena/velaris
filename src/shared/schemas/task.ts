@@ -54,4 +54,15 @@ export const taskUpdateSchema = z.object({
 
 export type TaskUpdateInput = z.infer<typeof taskUpdateSchema>;
 
+/**
+ * Tri-state soft-delete visibility filter for `GET /api/tasks`.
+ *   - "exclude" (default): live tasks only.
+ *   - "include": live + soft-deleted.
+ *   - "only": soft-deleted only.
+ * A boolean cannot express "only", hence the enum.
+ */
+export const taskDeletedFilterSchema = z.enum(["exclude", "include", "only"]).default("exclude");
+
+export type TaskDeletedFilter = z.infer<typeof taskDeletedFilterSchema>;
+
 export const taskIdSchema = uuidSchema;
