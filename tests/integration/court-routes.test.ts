@@ -391,6 +391,10 @@ describe("GET /api/tasks/{id}/plan", () => {
     expect(plan.subtasks).toHaveLength(2);
     expect(plan.subtasks[0].houseName).toBe(execHouse.name);
     expect(plan.subtasks[0].childTaskStatus).toBe("queued");
+    // Per-step agent falls back to the destination house's default (oldest)
+    // agent when the child task has no explicit agent_id.
+    expect(plan.subtasks[0].agentId).not.toBeNull();
+    expect(plan.subtasks[0].agentName).toBe("A");
     expect(plan.handoffs).toHaveLength(1);
     expect(plan.consolidated.summary).toBe("The wards held.");
   });

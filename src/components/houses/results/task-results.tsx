@@ -44,8 +44,10 @@ export function TaskResults({ houseId, refreshKey }: TaskResultsProps) {
       // candidates locally. A deleted task is always kept so its Restore
       // control stays reachable — including a deleted `queued` task, which no
       // other surface (Archives is terminal-only) can restore.
+      // `parent=all`: children must remain restorable here, so this surface
+      // opts out of the Quest Board's roots filter.
       const res = await apiFetch<{ tasks: TaskDto[] }>(
-        `/api/tasks?houseId=${houseId}&deleted=include`,
+        `/api/tasks?houseId=${houseId}&deleted=include&parent=all`,
       );
       const candidates = res.tasks.filter(
         (t) => t.deletedAt !== null || t.status === "completed" || t.status === "failed",

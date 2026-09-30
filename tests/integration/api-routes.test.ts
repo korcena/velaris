@@ -55,7 +55,10 @@ import {
   DELETE as deleteTaskRoute,
 } from "@/app/api/tasks/[id]/route";
 import { POST as restoreTaskRoute } from "@/app/api/tasks/[id]/restore/route";
+import { GET as getTaskTrace } from "@/app/api/tasks/[id]/trace/route";
 import { setTaskStatus } from "@/server/repositories/task-repo";
+import { createSubtask, linkChildTask } from "@/server/repositories/subtask-repo";
+import { createExecutionSession, createExecutionEvent, createAgentMessage } from "@/server/repositories/execution-repo";
 import { listAuditLog } from "@/server/repositories/audit-repo";
 
 /* ------------------------------------------------------------------ */
@@ -889,6 +892,98 @@ describe("GET /api/tasks", () => {
     const cancelledAfter = await (await listTasks(req(`${BASE}/api/tasks?status=cancelled`))).json();
     expect(cancelledAfter.tasks).toHaveLength(1);
     expect(cancelledAfter.tasks[0].id).toBe(t1.task.id);
+  });
+
+  it("supports ?parent=roots|all and rejects an invalid value with 400", async () => {
+    const parent = await (
+      await createTaskRoute(jsonReq("POST", `${BASE}/api/tasks`, { title: "Parent" }))
+    ).json();
+    const child = await (
+      await createTaskRoute(jsonReq("POST", `${BASE}/api/tasks`, { title: "Child" }))
+    ).json();
+
+    const s = createSubtask(getDb(), {
+      parentId: parent.task.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, child.task.id);
+
+    const defaultIds = ((await (await listTasks(req(`${BASE}/api/tasks`))).json()).tasks as {
+      id: string;
+    }[]).map((t) => t.id);
+    expect(defaultIds).toContain(parent.task.id);
+    expect(defaultIds).not.toContain(child.task.id);
+
+    const rootsIds = ((await (
+      await listTasks(req(`${BASE}/api/tasks?parent=roots`))
+    ).json()).tasks as { id: string }[]).map((t) => t.id);
+    expect(rootsIds).not.toContain(child.task.id);
+
+    const allIds = ((await (
+      await listTasks(req(`${BASE}/api/tasks?parent=all`))
+    ).json()).tasks as { id: string }[]).map((t) => t.id);
+    expect(allIds).toEqual(expect.arrayContaining([parent.task.id, child.task.id]));
+
+    const bad = await listTasks(req(`${BASE}/api/tasks?parent=bogus`));
+    expect(bad.status).toBe(400);
+  });
+});
+
+describe("GET /api/tasks/{id}/trace", () => {
+  it("404s for an unknown task", async () => {
+    const missing = randomUUID();
+    expect((await getTaskTrace(req(`${BASE}/api/tasks/${missing}/trace`), idCtx(missing))).status).toBe(404);
+  });
+
+  it("returns a tagged rollup across parent + child", async () => {
+    const house = await createHouse();
+    const parent = await (
+      await createTaskRoute(jsonReq("POST", `${BASE}/api/tasks`, { title: "Parent", houseId: house.id }))
+    ).json();
+    const child = await (
+      await createTaskRoute(jsonReq("POST", `${BASE}/api/tasks`, { title: "Child", houseId: house.id }))
+    ).json();
+    const s = createSubtask(getDb(), {
+      parentId: parent.task.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, child.task.id);
+
+    for (const taskId of [parent.task.id, child.task.id]) {
+      const session = createExecutionSession(getDb(), {
+        taskId,
+        houseId: house.id,
+        provider: "opencode",
+        modelId: "glm-5.3",
+      });
+      createExecutionEvent(getDb(), {
+        sessionId: session.id,
+        taskId,
+        houseId: house.id,
+        rawType: "task_started",
+        type: "task_started",
+        payload: {},
+      });
+      createAgentMessage(getDb(), { sessionId: session.id, role: "agent", content: `msg-${taskId}` });
+    }
+
+    const res = await getTaskTrace(req(`${BASE}/api/tasks/${parent.task.id}/trace`), idCtx(parent.task.id));
+    expect(res.status).toBe(200);
+    const { trace } = await res.json();
+    expect(trace.taskId).toBe(parent.task.id);
+    const taskIds = new Set(trace.entries.map((e: { taskId: string }) => e.taskId));
+    expect(taskIds.has(parent.task.id)).toBe(true);
+    expect(taskIds.has(child.task.id)).toBe(true);
+    const childEntry = trace.entries.find((e: { taskId: string }) => e.taskId === child.task.id);
+    expect(childEntry.subtaskId).toBe(s.id);
+    expect(childEntry.planId).toBe("s0");
+    expect(childEntry.agentName).toBe("Azriel");
   });
 });
 

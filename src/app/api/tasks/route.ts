@@ -3,14 +3,14 @@ import { bootstrapDb } from "@/server/bootstrap";
 import { getDb } from "@/lib/db";
 import { listTasks, createTask } from "@/server/repositories/task-repo";
 import { agentBelongsToHouse } from "@/server/repositories/house-repo";
-import { taskCreateSchema, taskDeletedFilterSchema } from "@/shared/schemas/task";
+import { taskCreateSchema, taskDeletedFilterSchema, taskParentFilterSchema } from "@/shared/schemas/task";
 import { created, ok, badRequest, routeErrorOrMapped } from "@/server/api-helpers";
 import { TASK_STATUSES } from "@/shared/constants";
 import type { TaskStatus } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/tasks?houseId=&projectId=&status=&deleted=exclude|include|only */
+/** GET /api/tasks?houseId=&projectId=&status=&deleted=exclude|include|only&parent=roots|all */
 export async function GET(req: NextRequest) {
   bootstrapDb();
   const sp = req.nextUrl.searchParams;
@@ -28,11 +28,19 @@ export async function GET(req: NextRequest) {
   if (deletedParsed && !deletedParsed.success) {
     return badRequest("deleted must be one of: exclude, include, only");
   }
+  // Board visibility filter; invalid values are a 400 (not a silent default).
+  const parentRaw = sp.get("parent");
+  const parentParsed =
+    parentRaw === null ? undefined : taskParentFilterSchema.safeParse(parentRaw);
+  if (parentParsed && !parentParsed.success) {
+    return badRequest("parent must be one of: roots, all");
+  }
   const tasks = listTasks(getDb(), {
     houseId,
     projectId,
     status,
     deleted: deletedParsed?.data,
+    parent: parentParsed?.data,
   });
   return ok({ tasks });
 }

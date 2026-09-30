@@ -3,7 +3,10 @@
  *
  * Responsibilities (Phase 4):
  *  - `buildPlanDto`: assemble a parent task's full plan (subtasks + handoffs +
- *    cost rollup + consolidated result) for the Court board.
+ *    cost rollup + consolidated result) for the Court board and the quest
+ *    detail page (`/quests/[id]`), which reuses this DTO.
+ *  - `resolveSubtaskAgent`: the engine-matching per-step agent (child task
+ *    agent, else destination house default) added to each subtask.
  *  - `buildCourtHistory`: the Court chat log across recent High Lord parent tasks
  *    (user instruction + agent plan text from the planning session's agent_messages).
  *  - `deriveHighLordPlanState`: derive the additive `planState` on the High Lord's
@@ -20,6 +23,7 @@ import {
 } from "@/server/repositories/subtask-repo";
 import { listHandoffsForParent } from "@/server/repositories/handoff-repo";
 import { getTask, taskRowToDto } from "@/server/repositories/task-repo";
+import { resolveRuntimeAgent, getAgent } from "@/server/repositories/house-repo";
 import {
   getUsageSummaryForTask,
   listSessionsForTask,
@@ -27,10 +31,12 @@ import {
   listAgentMessagesForSession,
 } from "@/server/repositories/execution-repo";
 import type {
+  Id,
   PlanDto,
   PlanConsolidatedResult,
   CourtMessageDto,
   HighLordPlanState,
+  SubtaskDto,
   TaskDto,
 } from "@/shared/types";
 import { parseJson } from "@/shared/schemas/common";
@@ -44,7 +50,10 @@ export function buildPlanDto(db: VelarisDb, parentTaskId: string): PlanDto | nul
   const parentTask = getTask(db, parentTaskId);
   if (!parentTask) return null;
 
-  const subtasks = listSubtasksForParent(db, parentTaskId);
+  const subtasks = listSubtasksForParent(db, parentTaskId).map((s) => ({
+    ...s,
+    ...resolveSubtaskAgent(db, s),
+  }));
   const handoffs = listHandoffsForParent(db, parentTaskId);
   const cost = getUsageSummaryForTask(db, parentTaskId);
 
@@ -56,6 +65,27 @@ export function buildPlanDto(db: VelarisDb, parentTaskId: string): PlanDto | nul
     cost,
     consolidated: buildConsolidated(db, parentTask),
   };
+}
+
+/**
+ * The agent that ran a subtask's child task: the child's explicit agent,
+ * else the destination house's default (oldest) agent — the same rule the
+ * engine applies when task.agent_id is null. Null when there is no child
+ * task or no resolvable agent.
+ */
+export function resolveSubtaskAgent(
+  db: VelarisDb,
+  subtask: Pick<SubtaskDto, "taskId" | "houseId">,
+): { agentId: Id | null; agentName: string | null } {
+  if (!subtask.taskId) return { agentId: null, agentName: null };
+  const child = getTask(db, subtask.taskId);
+  if (!child) return { agentId: null, agentName: null };
+  const agent = child.houseId
+    ? resolveRuntimeAgent(db, child.houseId, child)
+    : child.agentId
+      ? getAgent(db, child.agentId)
+      : null;
+  return { agentId: agent?.id ?? null, agentName: agent?.name ?? null };
 }
 
 /** Read the consolidated result block off the parent task when it is terminal. */

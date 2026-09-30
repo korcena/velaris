@@ -72,16 +72,41 @@ export interface ListTasksOptions {
    * the house panel can request exactly the deleted rows.
    */
   deleted?: "exclude" | "include" | "only";
+  /**
+   * Board visibility: "roots" (default) excludes any engine spin-off child;
+   * "all" returns every task. See the two-signal rule in `listTasks`.
+   */
+  parent?: "roots" | "all";
 }
 
 export function listTasks(db: VelarisDb, opts: ListTasksOptions = {}): TaskDto[] {
   const deleted = opts.deleted ?? "exclude";
+  const parent = opts.parent ?? "roots";
   const conditions = [
     opts.houseId ? eq(tasks.houseId, opts.houseId) : undefined,
     opts.projectId ? eq(tasks.projectId, opts.projectId) : undefined,
     opts.status ? eq(tasks.status, opts.status) : undefined,
     deleted === "exclude" ? isNull(tasks.deletedAt) : undefined,
     deleted === "only" ? isNotNull(tasks.deletedAt) : undefined,
+    // Two-signal "is this a root quest?" rule:
+    //   1. PRIMARY — the task is referenced by a `subtasks.task_id`. The engine's
+    //      `linkChildTask` re-points a subtask to a fresh child on retry, so a
+    //      retried-away child is no longer referenced by any subtask row.
+    //   2. HINT — `execution_preferences.parentTaskId`, written on EVERY engine
+    //      child at creation. It catches those retried-away, previously-terminal
+    //      children that signal 1 no longer sees, so they cannot leak back onto
+    //      the board as top-level postings.
+    // `json_valid` guard means a malformed (non-JSON) preference string can
+    // never make `json_extract` throw; it is treated as a root.
+    // KNOWN, ACCEPTED EDGE: `PATCH /api/tasks/{id}` can set an arbitrary
+    // `executionPreferences` on a non-subtask-linked task (it only blocks
+    // subtask-linked parents), so an API caller that deliberately sets
+    // `parentTaskId` would hide its own task. Not a user-facing flow; out of scope.
+    parent === "roots"
+      ? sql`${tasks.id} NOT IN (SELECT task_id FROM subtasks WHERE task_id IS NOT NULL)
+            AND (NOT json_valid(tasks.execution_preferences)
+                 OR json_extract(tasks.execution_preferences, '$.parentTaskId') IS NULL)`
+      : undefined,
   ].filter((c): c is ReturnType<typeof eq> => c !== undefined);
 
   const query = conditions.length

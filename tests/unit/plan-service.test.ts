@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { getDb, resetDbForTests } from "@/lib/db";
 import { migrate } from "@/lib/db/migrate";
-import { seedHighLordHouse, createHouse } from "@/server/repositories/house-repo";
+import { seedHighLordHouse, createHouse, createAgent } from "@/server/repositories/house-repo";
 import { createTask, setTaskStatus } from "@/server/repositories/task-repo";
 import { createSubtask, linkChildTask } from "@/server/repositories/subtask-repo";
 import { createHandoff } from "@/server/repositories/handoff-repo";
@@ -191,6 +191,73 @@ describe("buildPlanDto", () => {
     expect(plan!.consolidated).not.toBeNull();
     expect(plan!.consolidated!.summary).toBe("The wards held.");
     expect(plan!.consolidated!.fileCount).toBe(0);
+  });
+});
+
+describe("resolveSubtaskAgent via buildPlanDto", () => {
+  it("uses the child task's explicit agent", () => {
+    const hl = hlId();
+    const h1 = seedMistHouse();
+    const second = createAgent(getDb(), h1.id, {
+      name: "n name",
+      role: "n role",
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Quest", houseId: hl });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "Step",
+    });
+    const child = createTask(getDb(), { title: "child", houseId: h1.id, agentId: second.id });
+    linkChildTask(getDb(), s.id, child.id);
+
+    const plan = buildPlanDto(getDb(), parent.id)!;
+    expect(plan.subtasks[0].agentId).toBe(second.id);
+    expect(plan.subtasks[0].agentName).toBe("n name");
+  });
+
+  it("falls back to the destination house's oldest agent when the child has none", () => {
+    const hl = hlId();
+    const h1 = seedMistHouse(); // default agent "A" (oldest)
+    const second = createAgent(getDb(), h1.id, {
+      name: "newer",
+      role: "n role",
+      configuration: makeConfig(),
+    });
+    const parent = createTask(getDb(), { title: "Quest", houseId: hl });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "Step",
+    });
+    const child = createTask(getDb(), { title: "child", houseId: h1.id }); // no agentId
+    linkChildTask(getDb(), s.id, child.id);
+
+    const plan = buildPlanDto(getDb(), parent.id)!;
+    expect(plan.subtasks[0].agentId).not.toBeNull();
+    expect(plan.subtasks[0].agentId).not.toBe(second.id);
+    expect(plan.subtasks[0].agentName).toBe("A");
+  });
+
+  it("is null when the subtask has no child task", () => {
+    const hl = hlId();
+    const parent = createTask(getDb(), { title: "Quest", houseId: hl });
+    createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "Step",
+    });
+
+    const plan = buildPlanDto(getDb(), parent.id)!;
+    expect(plan.subtasks[0].agentId).toBeNull();
+    expect(plan.subtasks[0].agentName).toBeNull();
   });
 });
 

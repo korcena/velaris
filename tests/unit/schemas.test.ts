@@ -24,7 +24,7 @@ import {
   providerConfigCreateSchema,
   providerConfigUpdateSchema,
 } from "@/shared/schemas/provider-config";
-import { taskCreateSchema, taskUpdateSchema, taskDeletedFilterSchema } from "@/shared/schemas/task";
+import { taskCreateSchema, taskUpdateSchema, taskDeletedFilterSchema, taskParentFilterSchema } from "@/shared/schemas/task";
 import { uuidSchema, trimmedNonEmpty, parseJson } from "@/shared/schemas/common";
 import {
   planSchema,
@@ -666,6 +666,24 @@ describe("taskDeletedFilterSchema", () => {
   it("rejects anything else (including booleans)", () => {
     for (const v of ["nonsense", "true", "all", ""]) {
       expect(() => taskDeletedFilterSchema.parse(v)).toThrow();
+    }
+  });
+});
+
+describe("taskParentFilterSchema", () => {
+  it("defaults to 'roots' when absent", () => {
+    expect(taskParentFilterSchema.parse(undefined)).toBe("roots");
+  });
+
+  it("accepts roots/all", () => {
+    for (const v of ["roots", "all"] as const) {
+      expect(taskParentFilterSchema.parse(v)).toBe(v);
+    }
+  });
+
+  it("rejects anything else", () => {
+    for (const v of ["exclude", "true", "", "nonsense"]) {
+      expect(() => taskParentFilterSchema.parse(v)).toThrow();
     }
   });
 });

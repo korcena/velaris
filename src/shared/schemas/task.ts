@@ -65,4 +65,14 @@ export const taskDeletedFilterSchema = z.enum(["exclude", "include", "only"]).de
 
 export type TaskDeletedFilter = z.infer<typeof taskDeletedFilterSchema>;
 
+/**
+ * Board visibility filter for `GET /api/tasks`:
+ *   - "roots" (default): top-level quests only — a task referenced by a
+ *     `subtasks.task_id` is an engine spin-off child and is hidden.
+ *   - "all": every task (house panel / monitoring / full set).
+ */
+export const taskParentFilterSchema = z.enum(["roots", "all"]).default("roots");
+
+export type TaskParentFilter = z.infer<typeof taskParentFilterSchema>;
+
 export const taskIdSchema = uuidSchema;

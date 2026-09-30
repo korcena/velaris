@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, useEffect, useState, useCallback } from "react";
-import { Activity, Loader2, Plus, Trash2, XCircle } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { Loader2, Plus, Trash2, XCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,7 +54,7 @@ import { useVelarisStream } from "@/components/realtime/velaris-stream";
 import { apiFetch } from "@/lib/api-client";
 import { taskCreateSchema } from "@/shared/schemas/task";
 import { DEFAULT_TASK_TYPES, TASK_PRIORITIES, isTaskDeletable } from "@/shared/constants";
-import type { TaskDto, HouseDto, ProjectDto, ExecutionEventDto } from "@/shared/types";
+import type { TaskDto, HouseDto, ProjectDto } from "@/shared/types";
 
 type TaskFormValues = z.infer<typeof taskCreateSchema>;
 
@@ -64,9 +65,6 @@ export default function QuestBoardPage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  // Expandable per-task activity feed (Job F.3).
-  const [activityOpen, setActivityOpen] = useState<string | null>(null);
-  const [eventsByTask, setEventsByTask] = useState<Record<string, ExecutionEventDto[]>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TaskDto | null>(null);
 
@@ -114,7 +112,7 @@ export default function QuestBoardPage() {
     setLoading(true);
     try {
       const [taskRes, houseRes, projectRes] = await Promise.all([
-        apiFetch<{ tasks: TaskDto[] }>("/api/tasks"),
+        apiFetch<{ tasks: TaskDto[] }>("/api/tasks?parent=roots"),
         apiFetch<{ houses: HouseDto[] }>("/api/houses?includeArchived=false"),
         apiFetch<{ projects: ProjectDto[] }>("/api/projects"),
       ]);
@@ -131,13 +129,6 @@ export default function QuestBoardPage() {
   useEffect(() => {
     void load();
   }, [load, sequence]);
-
-  useEffect(() => {
-    if (!activityOpen) return;
-    apiFetch<{ events: ExecutionEventDto[] }>(`/api/tasks/${activityOpen}/events`)
-      .then((res) => setEventsByTask((prev) => ({ ...prev, [activityOpen]: res.events })))
-      .catch(() => setEventsByTask((prev) => ({ ...prev, [activityOpen]: [] })));
-  }, [activityOpen, sequence]);
 
   async function cancelTask(id: string) {
     setBusyId(id);
@@ -230,7 +221,7 @@ export default function QuestBoardPage() {
                   <TableHead>Priority</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Assigned to</TableHead>
-                  <TableHead>Activity</TableHead>
+                  <TableHead>View</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -247,12 +238,7 @@ export default function QuestBoardPage() {
                             .find((a) => a.id === task.agentId)?.name ?? "—"
                         : "default"
                     }
-                    activityOpen={activityOpen === task.id}
-                    events={eventsByTask[task.id] ?? null}
                     busy={busyId === task.id}
-                    onToggleActivity={() =>
-                      setActivityOpen((cur) => (cur === task.id ? null : task.id))
-                    }
                     onCancel={() => cancelTask(task.id)}
                     onDelete={() => setDeleteTarget(task)}
                   />
@@ -456,20 +442,14 @@ function FragmentRow({
   task,
   houseName,
   agentName,
-  activityOpen,
-  events,
   busy,
-  onToggleActivity,
   onCancel,
   onDelete,
 }: {
   task: TaskDto;
   houseName: string;
   agentName: string;
-  activityOpen: boolean;
-  events: ExecutionEventDto[] | null;
   busy: boolean;
-  onToggleActivity: () => void;
   onCancel: () => void;
   onDelete: () => void;
 }) {
@@ -479,10 +459,7 @@ function FragmentRow({
       task={task}
       houseName={houseName}
       agentName={agentName}
-      activityOpen={activityOpen}
-      events={events}
       busy={busy}
-      onToggleActivity={onToggleActivity}
       onCancel={onCancel}
       onDelete={onDelete}
       cancellable={cancellable}
@@ -494,10 +471,7 @@ function FragmentRowContent({
   task,
   houseName,
   agentName,
-  activityOpen,
-  events,
   busy,
-  onToggleActivity,
   onCancel,
   onDelete,
   cancellable,
@@ -505,105 +479,70 @@ function FragmentRowContent({
   task: TaskDto;
   houseName: string;
   agentName: string;
-  activityOpen: boolean;
-  events: ExecutionEventDto[] | null;
   busy: boolean;
-  onToggleActivity: () => void;
   onCancel: () => void;
   onDelete: () => void;
   cancellable: boolean;
 }) {
   const deletable = isTaskDeletable(task.status);
   return (
-    <Fragment>
-      <TableRow>
-        <TableCell className="font-medium text-foreground">{task.title}</TableCell>
-        <TableCell>{task.type}</TableCell>
-        <TableCell>
-          <PriorityBadge priority={task.priority} />
-        </TableCell>
-        <TableCell>
-          <TaskStatusBadge status={task.status} />
-        </TableCell>
-        <TableCell className="text-muted-foreground">
-          <span>{houseName}</span>
-          {task.agentId ? (
-            <span className="ml-2 text-xs text-velaris-purple">{agentName}</span>
-          ) : null}
-        </TableCell>
-        <TableCell>
-          <Button variant="ghost" size="sm" onClick={onToggleActivity} aria-expanded={activityOpen}>
-            <Activity className="mr-1 h-3.5 w-3.5" />
-            {activityOpen ? "Hide" : "View"}
-          </Button>
-        </TableCell>
-        <TableCell className="text-right">
-          {cancellable && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onCancel}
-              disabled={busy}
-              className="text-velaris-crimson hover:bg-velaris-crimson/10"
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <XCircle className="h-3.5 w-3.5" />
-              )}
-              Cancel
-            </Button>
-          )}
+    <TableRow>
+      <TableCell className="font-medium text-foreground">{task.title}</TableCell>
+      <TableCell>{task.type}</TableCell>
+      <TableCell>
+        <PriorityBadge priority={task.priority} />
+      </TableCell>
+      <TableCell>
+        <TaskStatusBadge status={task.status} />
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        <span>{houseName}</span>
+        {task.agentId ? (
+          <span className="ml-2 text-xs text-velaris-purple">{agentName}</span>
+        ) : null}
+      </TableCell>
+      <TableCell>
+        <Button asChild variant="ghost" size="sm">
+          <Link href={`/quests/${task.id}`} data-testid={`quest-view-${task.id}`}>
+            View
+          </Link>
+        </Button>
+      </TableCell>
+      <TableCell className="text-right">
+        {cancellable && (
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
-            onClick={onDelete}
-            disabled={busy || !deletable}
-            title={
-              deletable
-                ? "Remove this quest from the board"
-                : `A '${task.status}' quest cannot be removed`
-            }
-            data-testid={`quest-delete-${task.id}`}
-            className="text-muted-foreground hover:text-velaris-crimson"
+            onClick={onCancel}
+            disabled={busy}
+            className="text-velaris-crimson hover:bg-velaris-crimson/10"
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5" />
+            )}
+            Cancel
           </Button>
-        </TableCell>
-      </TableRow>
-      {activityOpen ? (
-        <TableRow>
-          <TableCell colSpan={7}>
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-border bg-card/30 p-3 font-mono text-xs">
-              {events === null ? (
-                <p className="italic text-muted-foreground">Loading activity…</p>
-              ) : events.length === 0 ? (
-                <p className="italic text-muted-foreground">No activity recorded yet.</p>
-              ) : (
-                <ol className="space-y-2">
-                  {events.map((ev) => (
-                    <li key={ev.id} className="rounded border border-border bg-card/40 px-2 py-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <Badge variant="outline">{ev.type}</Badge>
-                        <span className="text-muted-foreground">
-                          {new Date(ev.createdAt).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      {ev.payload && Object.keys(ev.payload).length > 0 ? (
-                        <pre className="mt-1 overflow-x-auto text-[0.7rem] text-muted-foreground">
-                          {JSON.stringify(ev.payload)}
-                        </pre>
-                      ) : null}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          </TableCell>
-        </TableRow>
-      ) : null}
-    </Fragment>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onDelete}
+          disabled={busy || !deletable}
+          title={
+            deletable
+              ? "Remove this quest from the board"
+              : `A '${task.status}' quest cannot be removed`
+          }
+          data-testid={`quest-delete-${task.id}`}
+          className="text-muted-foreground hover:text-velaris-crimson"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete
+        </Button>
+      </TableCell>
+    </TableRow>
   );
 }
 

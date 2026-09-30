@@ -45,6 +45,8 @@ export function subtaskRowToDto(row: SubtaskRow): SubtaskDto {
     houseId: null,
     houseName: null,
     childTaskStatus: null,
+    agentId: null,
+    agentName: null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

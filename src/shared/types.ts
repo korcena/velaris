@@ -305,6 +305,38 @@ export interface AgentMessageDto {
   createdAt: IsoTimestamp;
 }
 
+export type TraceEntryKind = "event" | "message";
+
+/** One tagged row of a quest-tree trace (event or agent message). */
+export interface TraceEntryDto {
+  /** React key, stable across refetches: `e:${eventId}` / `m:${messageId}`. */
+  id: string;
+  kind: TraceEntryKind;
+  /** Parent task id; also the owning task for a child entry (child task id). */
+  taskId: Id | null;
+  /** `subtasks.id` when the row belongs to a delegated step, else null. */
+  subtaskId: Id | null;
+  /** Plan-local step id ("s0") when delegated, else null. */
+  planId: string | null;
+  agentId: Id | null;
+  agentName: string | null;
+  /** Event type for events; message role for messages. */
+  type: string;
+  createdAt: IsoTimestamp;
+  /** Event payload for kind="event"; null for messages. */
+  payload: Record<string, unknown> | null;
+  /** Message text for kind="message"; null for events. */
+  content: string | null;
+}
+
+/** Aggregated read-only trace across a quest tree (parent + non-deleted children). */
+export interface TaskTraceDto {
+  taskId: Id;
+  entries: TraceEntryDto[];
+  /** True when the merged list exceeded the cap and was truncated. */
+  truncated: boolean;
+}
+
 export interface ApproveOption {
   id: string;
   label: string;
@@ -413,6 +445,9 @@ export interface SubtaskDto {
   houseId: Id | null; // resolved destination
   houseName: string | null; // denormalized for the UI (join)
   childTaskStatus: TaskStatus | null; // tasks.status of the child row
+  /** Engine-routed agent for this step: child task agent, else destination house default. */
+  agentId: Id | null;
+  agentName: string | null;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
 }

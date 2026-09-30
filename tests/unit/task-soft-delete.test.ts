@@ -29,6 +29,7 @@ import {
   TaskNotFoundError,
   TaskNotDeletableError,
 } from "@/server/repositories/task-repo";
+import { createSubtask, linkChildTask } from "@/server/repositories/subtask-repo";
 import { isTaskDeletable } from "@/shared/constants";
 import type { TaskStatus } from "@/shared/types";
 
@@ -197,5 +198,109 @@ describe("listTasks deleted filter", () => {
     const task = getTask(getDb(), id);
     expect(task).not.toBeNull();
     expect(task!.deletedAt).not.toBeNull();
+  });
+});
+
+describe("listTasks parent filter", () => {
+  it("defaults to roots — a linked child is hidden, its parent kept", () => {
+    const parent = createTask(getDb(), { title: "parent" });
+    const child = createTask(getDb(), { title: "child" });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, child.id);
+
+    const ids = listTasks(getDb()).map((t) => t.id);
+    expect(ids).toContain(parent.id);
+    expect(ids).not.toContain(child.id);
+  });
+
+  it("parent: 'roots' matches; parent: 'all' returns both", () => {
+    const parent = createTask(getDb(), { title: "parent" });
+    const child = createTask(getDb(), { title: "child" });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, child.id);
+
+    const roots = listTasks(getDb(), { parent: "roots" }).map((t) => t.id);
+    expect(roots).toContain(parent.id);
+    expect(roots).not.toContain(child.id);
+
+    const all = listTasks(getDb(), { parent: "all" }).map((t) => t.id);
+    expect(all).toEqual(expect.arrayContaining([parent.id, child.id]));
+  });
+
+  it("combined with deleted: include still respects the parent filter", () => {
+    const parent = createTask(getDb(), { title: "parent" });
+    const child = createTask(getDb(), { title: "child" });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, child.id);
+    // A soft-deleted child must still be hidden under roots (the subtasks link
+    // is what excludes it, regardless of the deleted filter).
+    softDeleteTask(getDb(), child.id);
+
+    const rootsInclude = listTasks(getDb(), { parent: "roots", deleted: "include" }).map((t) => t.id);
+    expect(rootsInclude).not.toContain(child.id);
+
+    const allInclude = listTasks(getDb(), { parent: "all", deleted: "include" }).map((t) => t.id);
+    expect(allInclude).toEqual(expect.arrayContaining([parent.id, child.id]));
+  });
+
+  it("hides a retried-away child (orphaned by linkChildTask) via parentTaskId", () => {
+    // Engine children carry execution_preferences.parentTaskId at creation; on
+    // retry the subtask is re-pointed to a fresh child, leaving the old child
+    // terminal, not deleted, and referenced by no subtask row. The board must
+    // not resurface it as a top-level posting.
+    const parent = createTask(getDb(), { title: "parent" });
+    const c1 = createTask(getDb(), {
+      title: "child v1",
+      executionPreferences: { parentTaskId: parent.id },
+    });
+    const s = createSubtask(getDb(), {
+      parentId: parent.id,
+      planId: "s0",
+      orderIndex: 0,
+      dependsOn: [],
+      title: "step",
+    });
+    linkChildTask(getDb(), s.id, c1.id);
+
+    // Simulate the retry: fresh child, subtask re-pointed (old child orphaned).
+    const c2 = createTask(getDb(), {
+      title: "child v2",
+      executionPreferences: { parentTaskId: parent.id },
+    });
+    linkChildTask(getDb(), s.id, c2.id);
+
+    const roots = listTasks(getDb()).map((t) => t.id);
+    expect(roots).toContain(parent.id);
+    expect(roots).not.toContain(c1.id);
+    expect(roots).not.toContain(c2.id);
+
+    const all = listTasks(getDb(), { parent: "all" }).map((t) => t.id);
+    expect(all).toEqual(expect.arrayContaining([parent.id, c1.id, c2.id]));
+  });
+
+  it("keeps a plain task with empty executionPreferences as a root", () => {
+    const plain = createTask(getDb(), {
+      title: "plain",
+      executionPreferences: {},
+    });
+    expect(listTasks(getDb()).map((t) => t.id)).toContain(plain.id);
   });
 });
